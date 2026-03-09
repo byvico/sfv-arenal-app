@@ -5,6 +5,7 @@ workflows:
 
     environment:
       node: 18
+      java: 17
 
     scripts:
       - npm install --legacy-peer-deps
