@@ -7,7 +7,7 @@ workflows:
       node: 18
 
     scripts:
-       - npm install --legacy-peer-deps
+  - npm install --legacy-peer-deps
   - chmod +x node_modules/.bin/cap
   - npx cap sync android
   - cd android
