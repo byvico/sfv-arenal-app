@@ -6,8 +6,9 @@ workflows:
       node: 18
     scripts:
       - npm install --legacy-peer-deps
-      - npx cap sync android
-      - cd android
-      - ./gradlew assembleRelease
+  - npx cap sync android
+  - cd android
+  - chmod +x gradlew
+  - ./gradlew assembleRelease
     artifacts:
       - android/app/build/outputs/apk/release/*.apk
