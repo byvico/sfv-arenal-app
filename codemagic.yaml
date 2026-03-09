@@ -9,10 +9,11 @@ workflows:
 
     scripts:
       - npm install --legacy-peer-deps
+      - rm -rf ~/.gradle/caches
       - chmod +x node_modules/.bin/cap
       - npx cap sync android
       - chmod +x android/gradlew
-      - cd android && ./gradlew assembleRelease
+      - cd android && ./gradlew clean assembleRelease
 
     artifacts:
       - android/app/build/outputs/*/.apk
