@@ -2,6 +2,7 @@ workflows:
   android-build:
     name: Android Build
     max_build_duration: 60
+
     environment:
       node: 18
 
@@ -9,8 +10,7 @@ workflows:
       - npm install --legacy-peer-deps
       - chmod +x node_modules/.bin/cap
       - npx cap sync android
-      - cd android
-      - - chmod +x android/gradlew
+      - chmod +x android/gradlew
       - cd android
       - ./gradlew assembleRelease
 
