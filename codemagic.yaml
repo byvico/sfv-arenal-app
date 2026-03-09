@@ -10,7 +10,8 @@ workflows:
       - chmod +x node_modules/.bin/cap
       - npx cap sync android
       - cd android
-      - chmod +x gradlew
+      - - chmod +x android/gradlew
+      - cd android
       - ./gradlew assembleRelease
 
     artifacts:
