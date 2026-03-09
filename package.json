@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Dashboard SFV Arenal - App Android offline-first",
   "scripts": {
-    "sync": "npx cap sync",
+    "sync": "npx cap sync android",
     "open": "npx cap open android",
     "build": "echo 'Sitio estatico, no requiere build'"
   },
