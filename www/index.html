@@ -8,6 +8,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="format-detection" content="telephone=no">
 <meta name="theme-color" content="#1B3A2D">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1145,6 +1148,28 @@ let ctrlData=lsG(KC)||[];
 let casaEst=lsG(KE)||{};
 let casaEd=lsG(KED)||{};
 function saveCtrl(){lsS(window._KC||KC,ctrlData);}
+// ── Asegurar que cada registro tenga un id único para sync ──
+function _ensureIds(){
+  let maxN=0;
+  ctrlData.forEach(r=>{
+    // Si tiene item válido, siempre usar item como id (reemplaza ids temporales)
+    if(r.item && String(r.item).trim()!==''){
+      const itemStr = String(r.item).trim();
+      // Reemplazar id temporal por item real
+      if(!r.id || String(r.id).startsWith('tmp_') || r.id !== itemStr){
+        r.id = itemStr;
+      }
+    }
+    if(r.id!=null){const n=parseInt(r.id,10);if(!isNaN(n)&&n>maxN)maxN=n;}
+  });
+  // Asignar id temporal a registros que aún no tienen (recién creados sin item)
+  ctrlData.forEach(r=>{
+    if(r.id==null || String(r.id).trim()===''){
+      maxN++;
+      r.id='tmp_'+Date.now()+'_'+maxN;
+    }
+  });
+}
 function saveEst(){lsS(window._KE||KE,casaEst);}
 function saveEd(){lsS(window._KED||KED,casaEd);}
 function getEst(id){return casaEst[id]||'Pendiente';}
@@ -1528,14 +1553,25 @@ async function refreshFileCounts(items){
   for(const id of items){if(id)fileCounts[id]=await getFileCountForItem(id);}
 }
 
-function schedAS(){clearTimeout(autoST);autoST=setTimeout(()=>{lsS(KC,ctrlData);showToast('💾 Auto-guardado');},900);}
+function schedAS(){clearTimeout(autoST);autoST=setTimeout(()=>{_ensureIds();lsS(window._KC||KC,ctrlData);showToast('💾 Auto-guardado');if(window.SFV_SYNC&&window.SFV_SYNC.afterSave)window.SFV_SYNC.afterSave();},900);}
 function saveControl(){
   clearTimeout(autoST);
   const now=new Date().toISOString();
+  _ensureIds();
+  // Solo estampar updatedAt en registros que cambiaron vs último snapshot
+  const snap=window._ctrlSnapshot||{};
   ctrlData.forEach(r=>{
     delete r._new;
-    r.updatedAt=now; // ALWAYS stamp so sync can detect change
+    const key=String(r.id||r.item||'');
+    const prev=snap[key];
+    // Comparar campos significativos (sin updatedAt para evitar loop)
+    const sig=JSON.stringify({item:r.item,vereda:r.vereda,estado:r.estado,obs:r.obs,fecha:r.fecha,cuadrilla:r.cuadrilla,gps_lat:r.gps_lat,gps_lng:r.gps_lng,nombre:r.nombre,cedula:r.cedula});
+    if(!prev || prev!==sig || !r.updatedAt){
+      r.updatedAt=now;
+    }
+    snap[key]=sig;
   });
+  window._ctrlSnapshot=snap;
   lsS(window._KC||KC,ctrlData);
   renderCtrl();
   showToast('💾 Control guardado ('+ctrlData.length+' registros)');
@@ -1850,7 +1886,7 @@ async function addGeotagToImage(dataUrl, gpsData){
 async function addRow(){
   if(isViewer()){showToast('⛔ Modo solo lectura');return;}
   const q=SESSION?.role==='cuadrilla'?SESSION.cuadrilla:1;
-  const row={fecha:new Date().toISOString().slice(0,10),cuadrilla:q,item:'',vereda:'',estado:'Pendiente',obs:''};
+  const row={id:'tmp_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),fecha:new Date().toISOString().slice(0,10),cuadrilla:q,item:'',vereda:'',estado:'Pendiente',obs:'',updatedAt:new Date().toISOString()};
   if(SESSION?.role==='cuadrilla')row._new=true;
   ctrlData.push(row);
   renderCtrl();schedAS();
@@ -3961,8 +3997,9 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
 <script>
 // ══════════════════════════════════════════════════════════════════
 // SISTEMA DE SINCRONIZACIÓN — Firestore REST API (sin SDK)
-// Polling cada 8s + escritura inmediata al guardar
-// Sin bloqueos de pestañas · Funciona en incógnito · 0 dependencias
+// Polling cada 6s + escritura inmediata al guardar
+// FIX: paginación, hash completo, push+pull bidireccional,
+//      records sin id manejados, dirty tracking
 // ══════════════════════════════════════════════════════════════════
 (()=>{
   'use strict';
@@ -3982,6 +4019,14 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
   function _skey(){ const p=_pid(); return p==='arenal_2026'?'sfv_ctrl_v1':('sfv_p_'+p+'_ctrl_v1'); }
   function _colURL(pid){ return `${FB_BASE}/projects/${pid}/control`; }
   function _docURL(pid,id){ return `${FB_BASE}/projects/${pid}/control/${id}?key=${FB_API_KEY}`; }
+
+  // ── Obtener id efectivo de un registro (id > item > null) ────────
+  function _rid(r){
+    if(!r) return null;
+    if(r.id!=null && String(r.id).trim()!=='') return String(r.id).trim();
+    if(r.item!=null && String(r.item).trim()!=='') return String(r.item).trim();
+    return null;
+  }
 
   // ── Convert JS object to Firestore value map ──────────────────────
   function _toFV(val){
@@ -4023,74 +4068,115 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
 
   // ── Write one record to Firestore via REST PATCH ──────────────────
   async function _writeDoc(pid, record){
-    if(!record||record.id==null) return false;
-    const now = new Date().toISOString();
-    const r   = Object.assign({}, record, {updatedAt: now});
+    const id = _rid(record);
+    if(!id) return false;
+    // Asegurar que el registro tenga id antes de escribir
+    const r = Object.assign({}, record, {id: id});
+    if(!r.updatedAt) r.updatedAt = new Date().toISOString();
     const fields = {};
     Object.keys(r).forEach(k=>fields[k]=_toFV(r[k]));
-    const url = _docURL(pid, String(r.id));
-    const res = await fetch(url, {
-      method: 'PATCH',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({fields})
-    });
-    return res.ok;
+    const url = _docURL(pid, id);
+    try{
+      const res = await fetch(url, {
+        method: 'PATCH',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({fields})
+      });
+      return res.ok;
+    }catch(e){ return false; }
   }
 
   // ── Batch-write all records ───────────────────────────────────────
   async function _writeAll(records, pid){
     if(!records||!records.length||!_online) return;
+    // Solo escribir registros que tengan id válido
+    const writable = records.filter(r=>_rid(r));
+    if(!writable.length) return;
     _isSaving = true;
     _updUI(null);
     try{
-      // Write in parallel batches of 20
       const BATCH = 20;
-      for(let i=0; i<records.length; i+=BATCH){
-        const chunk = records.slice(i, i+BATCH);
+      for(let i=0; i<writable.length; i+=BATCH){
+        const chunk = writable.slice(i, i+BATCH);
         await Promise.all(chunk.map(r=>_writeDoc(pid, r)));
       }
       _updUI(true);
-      console.log('[SFV Sync] ✅ Escritos', records.length, '→ pid:', pid);
+      console.log('[SFV Sync] ✅ Escritos', writable.length, '→ pid:', pid);
     }catch(e){
       console.warn('[SFV Sync] writeAll error:', e.message);
       _updUI(false);
     } finally { _isSaving = false; }
   }
 
-  // ── Read all documents in the control sub-collection ─────────────
+  // ── Read all documents with pagination ────────────────────────────
   async function _readAll(pid){
     if(!_online) return null;
     try{
-      const url = `${_colURL(pid)}?key=${FB_API_KEY}&pageSize=500`;
-      const res = await fetch(url);
-      if(!res.ok){ console.warn('[SFV Sync] read HTTP', res.status); return null; }
-      const body = await res.json();
-      if(body.error){ console.warn('[SFV Sync] Firestore error:', body.error.message); return null; }
-      const docs = body.documents||[];
-      return docs.map(d=>_fromFDoc(d)).filter(Boolean);
+      let all = [];
+      let pageToken = '';
+      let safety = 0; // máximo 10 páginas (5000 docs)
+      do {
+        let url = `${_colURL(pid)}?key=${FB_API_KEY}&pageSize=500`;
+        if(pageToken) url += '&pageToken='+encodeURIComponent(pageToken);
+        const res = await fetch(url);
+        if(!res.ok){ console.warn('[SFV Sync] read HTTP', res.status); return null; }
+        const body = await res.json();
+        if(body.error){ console.warn('[SFV Sync] Firestore error:', body.error.message); return null; }
+        const docs = body.documents||[];
+        all = all.concat(docs.map(d=>_fromFDoc(d)).filter(Boolean));
+        pageToken = body.nextPageToken||'';
+        safety++;
+      } while(pageToken && safety<10);
+      return all;
     }catch(e){ console.warn('[SFV Sync] readAll error:', e.message); return null; }
   }
 
-  // ── Merge local + remote by updatedAt ────────────────────────────
+  // ── Merge local + remote por updatedAt a nivel de registro ────────
   function _merge(local, remote){
     const m={};
-    (local||[]).forEach(r=>{ if(r.id!=null) m[String(r.id)]=r; });
-    (remote||[]).forEach(r=>{
-      if(r.id==null) return;
-      const k=String(r.id), loc=m[k];
-      if(!loc||!loc.updatedAt||(r.updatedAt&&r.updatedAt>=loc.updatedAt)) m[k]=r;
+    // Primero: indexar locales por id efectivo
+    (local||[]).forEach(r=>{
+      const k=_rid(r);
+      if(k) m[k]=r;
     });
-    return Object.values(m);
+    // Segundo: remote gana si tiene updatedAt más reciente
+    (remote||[]).forEach(r=>{
+      const k=_rid(r);
+      if(!k) return;
+      const loc=m[k];
+      if(!loc || !loc.updatedAt || (r.updatedAt && r.updatedAt >= loc.updatedAt)){
+        m[k]=r;
+      }
+    });
+    // Tercero: incluir registros locales sin id (nuevos sin guardar)
+    const noId = (local||[]).filter(r=>!_rid(r));
+    return Object.values(m).concat(noId);
   }
 
-  // ── Hash records for change detection ────────────────────────────
+  // ── Hash completo de registros para detectar cambios ──────────────
   function _hash(records){
     if(!records||!records.length) return '0';
-    return records.reduce((h,r)=>{
-      const k = String(r.id)+(r.updatedAt||'')+(r.estado||'');
+    // Ordenar por id para hash determinístico
+    const sorted = [...records].sort((a,b)=>{
+      const ka=_rid(a)||'', kb=_rid(b)||'';
+      return ka<kb?-1:ka>kb?1:0;
+    });
+    return sorted.reduce((h,r)=>{
+      // Incluir TODOS los campos significativos en el hash
+      const k = (_rid(r)||'')+'|'+(r.updatedAt||'')+'|'+(r.estado||'')+'|'+(r.obs||'')+'|'+(r.fecha||'')+'|'+(r.cuadrilla||'')+'|'+(r.vereda||'')+'|'+(r.gps_lat||'')+'|'+(r.gps_lng||'')+'|'+(r.nombre||'')+'|'+(r.cedula||'')+'|'+(r.item||'');
       let s=0; for(let i=0;i<k.length;i++) s=(s*31+k.charCodeAt(i))&0xffffffff;
-      return (h^s)&0xffffffff;
-    },0).toString(36);
+      return (h*37+s)&0xffffffff; // usar multiplicación, no XOR (XOR pierde info con duplicados)
+    },1).toString(36);
+  }
+
+  // ── Construir snapshot para dirty tracking de saveControl ─────────
+  function _buildSnapshot(records){
+    const snap={};
+    (records||[]).forEach(r=>{
+      const key=String(r.id||r.item||'');
+      if(key) snap[key]=JSON.stringify({item:r.item,vereda:r.vereda,estado:r.estado,obs:r.obs,fecha:r.fecha,cuadrilla:r.cuadrilla,gps_lat:r.gps_lat,gps_lng:r.gps_lng,nombre:r.nombre,cedula:r.cedula});
+    });
+    return snap;
   }
 
   // ── Apply merged records to UI ────────────────────────────────────
@@ -4099,51 +4185,85 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
     const k = _skey();
     localStorage.setItem(k, JSON.stringify(records));
     window.ctrlData = records;
+    window._ctrlSnapshot = _buildSnapshot(records);
     if(typeof renderCtrl === 'function') renderCtrl();
     if(typeof updateKPIs === 'function') updateKPIs();
     if(typeof renderDir  === 'function') renderDir();
   }
 
-  // ── Pull on startup ───────────────────────────────────────────────
+  // ── Pull: traer datos remotos y mergear con locales ───────────────
   async function _pull(){
     const pid = _pid(), k = _skey();
-    // 1. Show local immediately
+    // 1. Cargar local inmediatamente
     let local = []; try{ local=JSON.parse(localStorage.getItem(k)||'[]'); }catch(e){}
-    if(local.length){ window.ctrlData=local; if(typeof renderCtrl==='function')renderCtrl(); if(typeof updateKPIs==='function')updateKPIs(); }
+    // Asegurar ids en datos locales
+    if(typeof _ensureIds==='function') _ensureIds();
+    local = window.ctrlData || local;
+    if(local.length && !window._ctrlInitialRender){
+      window.ctrlData=local;
+      if(typeof renderCtrl==='function')renderCtrl();
+      if(typeof updateKPIs==='function')updateKPIs();
+      window._ctrlInitialRender=true;
+    }
     // 2. Fetch remote
     const remote = await _readAll(pid);
-    if(remote===null) return; // offline/error
-    if(!remote.length && local.length){ await _writeAll(local, pid); return; } // upload if Firestore empty
+    if(remote===null) return; // offline/error — mantener local
+    // 3. Si Firestore vacío y hay datos locales → subir todo
+    if(!remote.length && local.length){
+      await _writeAll(local, pid);
+      _lastHash = _hash(local);
+      _updUI(true);
+      return;
+    }
+    // 4. Merge y aplicar si hay cambios
     const merged = _merge(local, remote);
     const newHash = _hash(merged);
     if(newHash !== _lastHash){
       _lastHash = newHash;
       _applyUI(merged, pid);
+      // Si merged tiene más registros que remote, subir los nuevos
+      if(merged.length > remote.length){
+        await _writeAll(merged, pid);
+      }
       showToast('🔁 Datos sincronizados ✓');
+    } else {
+      _updUI(true);
     }
   }
 
-  // ── Polling loop ──────────────────────────────────────────────────
+  // ── Polling bidireccional: pull + push cambios locales ────────────
   async function _poll(){
     if(!_online || _isSaving) return;
     const pid = _pid();
     try{
+      const local = window.ctrlData||[];
+      const localHash = _hash(local);
       const remote = await _readAll(pid);
       if(remote===null) return;
-      const merged = _merge(window.ctrlData||[], remote);
-      const newHash = _hash(merged);
-      if(newHash !== _lastHash){
-        _lastHash = newHash;
+
+      const merged = _merge(local, remote);
+      const mergedHash = _hash(merged);
+
+      // ¿Hay cambios remotos nuevos?
+      if(mergedHash !== _lastHash){
+        _lastHash = mergedHash;
         _applyUI(merged, pid);
-        showToast('🔁 Actualización recibida desde otro dispositivo ✓');
+        showToast('🔁 Actualización recibida ✓');
+      }
+
+      // ¿Hay cambios locales que no están en remote?
+      if(localHash !== _hash(remote) && local.length){
+        // Hay diferencias — subir merged a Firestore
+        await _writeAll(merged, pid);
+        _lastHash = _hash(merged);
       }
     }catch(e){ console.warn('[SFV Poll]', e.message); }
   }
 
   function _startPoll(){
     if(_pollTimer) clearInterval(_pollTimer);
-    _pollTimer = setInterval(_poll, 8000);
-    console.log('[SFV Sync] ⏱ Polling cada 8s');
+    _pollTimer = setInterval(_poll, 6000); // Reducido de 8s a 6s para mayor responsividad
+    console.log('[SFV Sync] ⏱ Polling cada 6s');
   }
   function _stopPoll(){ if(_pollTimer){ clearInterval(_pollTimer); _pollTimer=null; } }
 
@@ -4153,33 +4273,50 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
     if(!_online){ if(dot)dot.textContent='🟠'; if(tx)tx.textContent='Sin conexión — modo offline'; return; }
     if(ok===true) { if(dot)dot.textContent='🟢'; if(tx)tx.textContent='Sincronizado'; }
     else if(ok===false){ if(dot)dot.textContent='🟡'; if(tx)tx.textContent='Error de sincronización'; }
-    else              { if(dot)dot.textContent='🔵'; if(tx)tx.textContent='En línea'; }
+    else              { if(dot)dot.textContent='🔵'; if(tx)tx.textContent='Sincronizando...'; }
   }
-  window.addEventListener('online',  ()=>{ _online=true;  _updUI(null); _startPoll(); });
+  window.addEventListener('online',  ()=>{ _online=true;  _updUI(null); _startPoll(); _pull(); });
   window.addEventListener('offline', ()=>{ _online=false; _updUI(null); _stopPoll();  });
 
   // ── Public API ────────────────────────────────────────────────────
   window.SFV_SYNC = {
     init(){
       _online = navigator.onLine;
-      if(_online){ _startPoll(); setTimeout(()=>_pull(), 1500); }
-      else { _updUI(null); }
+      if(_online){
+        _startPoll();
+        // Pull inmediato (sin delay de 1500ms que causaba datos obsoletos)
+        _pull().then(()=> _updUI(true)).catch(()=> _updUI(false));
+      } else { _updUI(null); }
     },
     restart(){
       _stopPoll();
-      if(_online){ _startPoll(); setTimeout(()=>_pull(), 800); }
+      _lastHash = '';
+      window._ctrlInitialRender = false;
+      if(_online){ _startPoll(); _pull().catch(()=> _updUI(false)); }
     },
-    // Called immediately after saveControl()
+    // Called immediately after saveControl() or schedAS()
     afterSave(){
+      if(typeof _ensureIds==='function') _ensureIds();
       const pid=_pid(), records=window.ctrlData||[];
-      if(_online && records.length) _writeAll(records, pid).then(()=>{ _lastHash=_hash(records); });
+      const writable = records.filter(r=>_rid(r));
+      if(_online && writable.length){
+        _writeAll(writable, pid).then(()=>{
+          _lastHash=_hash(records);
+          _updUI(true);
+        });
+      }
     },
     forceSyncNow(){
       if(!_online){ showToast('⚠️ Sin conexión a internet'); return; }
       showToast('🔄 Sincronizando con Firestore...');
-      _pull().then(()=> _writeAll(window.ctrlData||[], _pid())).then(()=>showToast('✅ Sync manual completado'));
+      if(typeof _ensureIds==='function') _ensureIds();
+      _pull().then(()=> _writeAll(window.ctrlData||[], _pid())).then(()=>{
+        _lastHash=_hash(window.ctrlData||[]);
+        showToast('✅ Sync completado');
+        _updUI(true);
+      }).catch(()=> _updUI(false));
     },
-    pullNow(){ _pull(); },
+    pullNow(){ return _pull(); },
     // File/photo upload via Firebase Storage REST API
     async queueFile(itemId, slotKey, blob, filename){
       if(!_online) return;
@@ -4218,10 +4355,15 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
   // ── Init on load ─────────────────────────────────────────────────
   window.addEventListener('load', ()=>{
     _updUI(null);
+    // Iniciar sync siempre (excepto en preview de Anthropic)
     const loc = window.location.hostname;
-    const isDeployed = loc && loc !== 'www.claudeusercontent.com' && loc !== 'claude.ai' && loc !== '';
-    if(isDeployed){
-      setTimeout(()=>{ window.SFV_SYNC.init(); _patch(); }, 1000);
+    const isBlocked = loc === 'www.claudeusercontent.com' || loc === 'claude.ai';
+    if(!isBlocked){
+      // Patch inmediato, init sin delay
+      _patch();
+      window.SFV_SYNC.init();
+      // Re-intentar patch después de que initAll cargue (por si saveControl se define tarde)
+      setTimeout(_patch, 500);
     }
   });
 
