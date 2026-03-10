@@ -1025,35 +1025,6 @@ function getPwds(){
 }
 function savePwdStore(obj){try{localStorage.setItem(AUTH_KEY,JSON.stringify(obj));}catch(e){}}
 
-// ── Unified password getter/setter (fixes dual-store bug) ──────────
-function getQPwd(q, projectId){
-  const pid = projectId || (typeof getActiveProjectId==='function'?getActiveProjectId():'arenal_2026');
-  if(pid==='arenal_2026'){
-    const global=getPwds();
-    return global['c'+q]||DEFAULT_PWD['c'+q]||'';
-  }
-  const proj=(typeof getAllProjects==='function')?getAllProjects().find(p=>p.id===pid):null;
-  return proj?.passwords?.['c'+q]||'';
-}
-function setQPwd(q, newPwd, projectId){
-  const pid = projectId || (typeof getActiveProjectId==='function'?getActiveProjectId():'arenal_2026');
-  if(pid==='arenal_2026'){
-    const global=getPwds();
-    global['c'+q]=newPwd;
-    savePwdStore(global);
-  } else {
-    try{
-      const all=JSON.parse(localStorage.getItem('sfv_mp_projects_v1')||'[]');
-      const proj=all.find(p=>p.id===pid);
-      if(proj){
-        if(!proj.passwords) proj.passwords={};
-        proj.passwords['c'+q]=newPwd;
-        localStorage.setItem('sfv_mp_projects_v1',JSON.stringify(all));
-      }
-    }catch(e){console.warn('setQPwd error:',e);}
-  }
-}
-
 // Generate random password for cuadrillas (min 10 alphanumeric chars)
 function _genPwd(){
   const chars='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -1081,13 +1052,20 @@ function doLogin(){
   }
   
   // 2. Search ALL projects for matching cuadrilla password
+  //    FIX: Arenal stores passwords in global store (sfv_auth_v2), NOT in project object.
+  //    We merge them here so every project is checked uniformly.
+  //    Each password is bound to exactly ONE project — no cross-project leaks.
   if(typeof getAllProjects==='function'){
     const allProjs=getAllProjects();
     for(const proj of allProjs){
-      const ppwds=proj.passwords||{};
-      for(let q=1;q<=8;q++){
-        if(ppwds['c'+q]&&pwd===ppwds['c'+q]){
-          // Auto-switch to this project
+      // Build password map: Arenal uses global store, others use proj.passwords
+      const ppwds = (proj.id==='arenal_2026')
+        ? {c1:globalPwds.c1, c2:globalPwds.c2, c3:globalPwds.c3, c4:globalPwds.c4}
+        : (proj.passwords||{});
+      const maxQ = (proj.cuadrillas||[]).length || 4;
+      for(let q=1; q<=maxQ; q++){
+        if(ppwds['c'+q] && pwd===ppwds['c'+q]){
+          // ✅ Match — this password belongs to this specific project
           localStorage.setItem('sfv_mp_active_v1', proj.id);
           const cuadrilla=proj.cuadrillas?proj.cuadrillas.find(x=>x.id===q):null;
           SESSION={role:'cuadrilla',cuadrilla:q,name:(cuadrilla?.name||'Cuadrilla '+q),canEdit:true,projectId:proj.id};
@@ -1097,15 +1075,7 @@ function doLogin(){
     }
   }
   
-  // 3. Legacy: old-style global cuadrilla passwords (for Arenal backward compat)
-  for(let q=1;q<=4;q++){
-    if(pwd===globalPwds['c'+q]){
-      SESSION={role:'cuadrilla',cuadrilla:q,name:'Cuadrilla '+q,canEdit:true,projectId:'arenal_2026'};
-      startApp(); return;
-    }
-  }
-  
-  // 4. Visitor passwords
+  // 3. Visitor passwords
   const vis=globalPwds.visitors?.find(v=>v.password===pwd);
   if(vis){SESSION={role:'visitor',cuadrilla:null,name:vis.name,canEdit:vis.canEdit,visId:vis.id};startApp();return;}
   
@@ -1550,15 +1520,26 @@ function saveControl(){
 }
 
 async function renderCtrl(){
-  // visible rows filtered by cuadrilla if cuadrilla user
-  const vis=SESSION?.role==='cuadrilla'?ctrlData.filter(r=>String(r.cuadrilla)===String(SESSION.cuadrilla)):ctrlData;
+  // visible rows: cuadrilla users only see their unsaved rows (_new flag)
+  // After pressing "Guardar", _new is removed → rows disappear from table (data persists in system)
+  // Master/admin sees ALL rows from ALL cuadrillas
+  const vis=SESSION?.role==='cuadrilla'
+    ?ctrlData.filter(r=>r._new && String(r.cuadrilla)===String(SESSION.cuadrilla))
+    :ctrlData;
   // refresh file counts
   const ids=[...new Set(vis.map(r=>r.item).filter(Boolean))];
   await refreshFileCounts(ids);
 
   const tbody=document.getElementById('ctrlBody');tbody.innerHTML='';
   if(!vis.length){
-    tbody.innerHTML='<tr><td colspan="11" style="text-align:center;padding:26px;color:var(--mt)">Sin registros. Haz clic en "+ Agregar" para iniciar el control diario.</td></tr>';
+    // Count total saved records for this cuadrilla to show context
+    const savedCount=SESSION?.role==='cuadrilla'
+      ?ctrlData.filter(r=>!r._new && String(r.cuadrilla)===String(SESSION.cuadrilla)).length
+      :0;
+    const emptyMsg=savedCount>0
+      ?'✅ '+savedCount+' registros guardados. Haz clic en "+ Agregar" para registrar una nueva instalación.'
+      :'Sin registros. Haz clic en "+ Agregar" para iniciar el control diario.';
+    tbody.innerHTML='<tr><td colspan="11" style="text-align:center;padding:26px;color:var(--mt)">'+emptyMsg+'</td></tr>';
     updateKPIs();return;
   }
   vis.forEach(row=>{
@@ -1858,7 +1839,7 @@ async function addGeotagToImage(dataUrl, gpsData){
 async function addRow(){
   if(isViewer()){showToast('⛔ Modo solo lectura');return;}
   const q=SESSION?.role==='cuadrilla'?SESSION.cuadrilla:1;
-  const row={id:'r_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),fecha:new Date().toISOString().slice(0,10),cuadrilla:q,item:'',vereda:'',estado:'Pendiente',obs:''};
+  const row={fecha:new Date().toISOString().slice(0,10),cuadrilla:q,item:'',vereda:'',estado:'Pendiente',obs:''};
   if(SESSION?.role==='cuadrilla')row._new=true;
   ctrlData.push(row);
   renderCtrl();schedAS();
@@ -2822,19 +2803,20 @@ function openChangeMyCuadrillaPwd(){
 }
 function saveMyNewPwd(){
   if(SESSION?.role!=='cuadrilla')return;
-  const pid=SESSION.projectId||getActiveProjectId();
-  const currentPwd=getQPwd(SESSION.cuadrilla, pid);
+  const pwds=getPwds();
   const cur=document.getElementById('mpCurrent').value;
   const nw=document.getElementById('mpNew').value.trim();
   const cf=document.getElementById('mpConfirm').value.trim();
   const errEl=document.getElementById('mpErr');
   errEl.textContent='';
   // Validate current password
-  if(cur!==currentPwd){errEl.textContent='❌ Contraseña actual incorrecta';return;}
+  if(cur!==pwds['c'+SESSION.cuadrilla]){errEl.textContent='❌ Contraseña actual incorrecta';return;}
   if(nw.length<6){errEl.textContent='❌ La nueva contraseña debe tener al menos 6 caracteres';return;}
   if(nw!==cf){errEl.textContent='❌ Las contraseñas nuevas no coinciden';return;}
-  // Save using unified setter
-  setQPwd(SESSION.cuadrilla, nw, pid);
+  // Save
+  pwds['c'+SESSION.cuadrilla]=nw;
+  savePwdStore(pwds);
+  // Update current session context so they don't get locked out immediately
   document.getElementById('myPwdModal').classList.remove('open');
   showToast('🔐 Contraseña de C'+SESSION.cuadrilla+' actualizada correctamente. El master puede verla en su panel.');
   notifyPasswordChange(SESSION.cuadrilla);
@@ -2950,25 +2932,31 @@ function savePwds(){
   const pwds=getPwds();
   const nm=document.getElementById('ppMaster')?.value.trim();
   if(nm&&nm!==pwds.master)pwds.master=nm;
-
-  // ── Save cuadrilla passwords using unified setter ────────────
   [1,2,3,4,5,6,7,8].forEach(q=>{
-    // Arenal/global passwords (ppC1, ppC2, etc.)
+    // Arenal/global passwords
     const vG=document.getElementById('ppC'+q)?.value.trim();
-    if(vG) setQPwd(q, vG, 'arenal_2026');
-
-    // Active non-Arenal project passwords (ppProj_active_c1, etc.)
+    if(vG) pwds['c'+q]=vG;
+    // Active non-Arenal project passwords via ppProj_active_cQ
     const vA=document.getElementById('ppProj_active_c'+q)?.value.trim();
-    if(vA&&typeof getActiveProjectId==='function'){
+    if(vA&&typeof getActiveProject==='function'&&typeof getActiveProjectId==='function'){
       const pid=getActiveProjectId();
-      if(pid&&pid!=='arenal_2026') setQPwd(q, vA, pid);
+      if(pid&&pid!=='arenal_2026'){
+        const proj=getActiveProject();
+        if(proj&&proj.passwords){ proj.passwords['c'+q]=vA; }
+        // Save back to project list
+        const KMP='sfv_mp_projects_v1';
+        const saved=JSON.parse(localStorage.getItem(KMP)||'[]');
+        const si=saved.findIndex(p=>p.id===pid);
+        if(si>=0&&saved[si].passwords) saved[si].passwords['c'+q]=vA;
+        localStorage.setItem(KMP,JSON.stringify(saved));
+      }
     }
   });
-
-  // ── Save per-project passwords (ppProj_{projId}_c{q.id} inputs) ──
+  // Save per-project passwords (ppProj_<projId>_c<q> inputs)
   if(typeof getAllProjects==='function'){
     const allProjs=getAllProjects().filter(p=>!p.isBuiltIn&&p.passwords);
     if(allProjs.length){
+      const all=getAllProjects();
       let changed=false;
       allProjs.forEach(proj=>{
         (proj.cuadrillas||[]).forEach(q=>{
@@ -2976,16 +2964,25 @@ function savePwds(){
           if(inp){
             const nv=inp.value.trim();
             if(nv&&nv!=='(sin asignar)'&&nv!==proj.passwords['c'+q.id]){
-              setQPwd(q.id, nv, proj.id);
+              proj.passwords['c'+q.id]=nv;
               changed=true;
             }
           }
         });
       });
+      if(changed){
+        // Update projects list in localStorage
+        const KMP='sfv_mp_projects_v1';
+        const saved=JSON.parse(localStorage.getItem(KMP)||'[]');
+        allProjs.forEach(proj=>{
+          const idx=saved.findIndex(p=>p.id===proj.id);
+          if(idx>=0) saved[idx].passwords=proj.passwords;
+        });
+        localStorage.setItem(KMP,JSON.stringify(saved));
+      }
     }
   }
-
-  // ── Visitors from DOM ────────────
+  // Visitors from DOM
   const newVisitors=[];
   document.querySelectorAll('[id^="vrow-"]').forEach(row=>{
     const vid=row.id.replace('vrow-','');
@@ -4057,14 +4054,12 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
       _applyUI(merged, pid);
       showToast('🔁 Datos sincronizados ✓');
     }
-    // 3. Also pull estados and edits on startup
-    if(window.SFV_SYNC){
-      window.SFV_SYNC.pullEstados();
-      window.SFV_SYNC.pullEdits();
-    }
+    // 3. Also pull project list on startup
+    if(window.SFV_SYNC) window.SFV_SYNC.pullProjectList();
   }
 
   // ── Polling loop ──────────────────────────────────────────────────
+  let _pollCount=0;
   async function _poll(){
     if(!_online || _isSaving) return;
     const pid = _pid();
@@ -4078,12 +4073,10 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
         _applyUI(merged, pid);
         showToast('🔁 Actualización recibida desde otro dispositivo ✓');
       }
-      // Also pull estados and edits periodically (every other poll = ~16s)
-      if(!_poll._cnt) _poll._cnt=0;
-      _poll._cnt++;
-      if(_poll._cnt % 2 === 0 && window.SFV_SYNC){
-        window.SFV_SYNC.pullEstados();
-        window.SFV_SYNC.pullEdits();
+      // Every 3rd poll (~24s), also sync project list
+      _pollCount++;
+      if(_pollCount % 3 === 0 && window.SFV_SYNC){
+        window.SFV_SYNC.pullProjectList();
       }
     }catch(e){ console.warn('[SFV Poll]', e.message); }
   }
@@ -4122,93 +4115,12 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
       const pid=_pid(), records=window.ctrlData||[];
       if(_online && records.length) _writeAll(records, pid).then(()=>{ _lastHash=_hash(records); });
     },
-    // ── NEW: Sync estados to Firestore ────────────────────────────
-    async writeEstados(){
-      if(!_online) return;
-      const pid=_pid();
-      const key=(pid==='arenal_2026')?'sfv_est_v1':('sfv_p_'+pid+'_est_v1');
-      try{
-        const data=JSON.parse(localStorage.getItem(key)||'{}');
-        const fields={};
-        Object.keys(data).forEach(k=>fields['s'+k]=_toFV(data[k])); // prefix keys with 's' to avoid numeric-only keys
-        const url=`${FB_BASE}/projects/${pid}/estados/data?key=${FB_API_KEY}`;
-        await fetch(url,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});
-      }catch(e){console.warn('[SFV Sync] writeEstados error:',e.message);}
-    },
-    // ── NEW: Sync edits to Firestore ──────────────────────────────
-    async writeEdits(){
-      if(!_online) return;
-      const pid=_pid();
-      const key=(pid==='arenal_2026')?'sfv_edits_v1':('sfv_p_'+pid+'_edits_v1');
-      try{
-        const data=JSON.parse(localStorage.getItem(key)||'{}');
-        const fields={};
-        Object.keys(data).forEach(k=>fields['e'+k]=_toFV(data[k]));
-        const url=`${FB_BASE}/projects/${pid}/edits/data?key=${FB_API_KEY}`;
-        await fetch(url,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});
-      }catch(e){console.warn('[SFV Sync] writeEdits error:',e.message);}
-    },
-    // ── NEW: Pull estados + edits from Firestore ──────────────────
-    async pullEstados(){
-      if(!_online) return;
-      const pid=_pid();
-      try{
-        const url=`${FB_BASE}/projects/${pid}/estados/data?key=${FB_API_KEY}`;
-        const res=await fetch(url);
-        if(!res.ok) return;
-        const body=await res.json();
-        const remote=_fromFDoc(body);
-        if(!remote) return;
-        // Reconstruct keys (remove 's' prefix)
-        const clean={};
-        Object.keys(remote).forEach(k=>{
-          const realKey=k.startsWith('s')?k.slice(1):k;
-          clean[realKey]=remote[k];
-        });
-        const key=(pid==='arenal_2026')?'sfv_est_v1':('sfv_p_'+pid+'_est_v1');
-        const local=JSON.parse(localStorage.getItem(key)||'{}');
-        const merged=Object.assign({},local,clean);
-        localStorage.setItem(key,JSON.stringify(merged));
-        window.casaEst=merged;
-        if(typeof updateKPIs==='function') updateKPIs();
-        if(typeof renderDir==='function') renderDir();
-      }catch(e){console.warn('[SFV Sync] pullEstados error:',e.message);}
-    },
-    async pullEdits(){
-      if(!_online) return;
-      const pid=_pid();
-      try{
-        const url=`${FB_BASE}/projects/${pid}/edits/data?key=${FB_API_KEY}`;
-        const res=await fetch(url);
-        if(!res.ok) return;
-        const body=await res.json();
-        const remote=_fromFDoc(body);
-        if(!remote) return;
-        const clean={};
-        Object.keys(remote).forEach(k=>{
-          const realKey=k.startsWith('e')?k.slice(1):k;
-          clean[realKey]=remote[k];
-        });
-        const key=(pid==='arenal_2026')?'sfv_edits_v1':('sfv_p_'+pid+'_edits_v1');
-        const local=JSON.parse(localStorage.getItem(key)||'{}');
-        const merged=Object.assign({},local,clean);
-        localStorage.setItem(key,JSON.stringify(merged));
-        window.casaEd=merged;
-        if(typeof renderDir==='function') renderDir();
-      }catch(e){console.warn('[SFV Sync] pullEdits error:',e.message);}
-    },
     forceSyncNow(){
       if(!_online){ showToast('⚠️ Sin conexión a internet'); return; }
       showToast('🔄 Sincronizando con Firestore...');
-      Promise.all([
-        _pull(),
-        this.pullEstados(),
-        this.pullEdits()
-      ]).then(()=> _writeAll(window.ctrlData||[], _pid()))
-       .then(()=>{ this.writeEstados(); this.writeEdits(); })
-       .then(()=>showToast('✅ Sync manual completado'));
+      _pull().then(()=> _writeAll(window.ctrlData||[], _pid())).then(()=>showToast('✅ Sync manual completado'));
     },
-    pullNow(){ _pull(); this.pullEstados(); this.pullEdits(); },
+    pullNow(){ _pull(); },
     // File/photo upload via Firebase Storage REST API
     async queueFile(itemId, slotKey, blob, filename){
       if(!_online) return;
@@ -4222,6 +4134,84 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
       }catch(e){ console.warn('[SFV Storage]', e.message); }
     },
     getStatus(){ return{online:_online, pid:_pid()}; },
+
+    // ── PROJECT LIST SYNC ─────────────────────────────────────────
+    // Write project list to Firestore (global/projects_meta)
+    async writeProjectList(){
+      if(!_online) return;
+      try{
+        const KMP='sfv_mp_projects_v1';
+        const raw=localStorage.getItem(KMP);
+        if(!raw) return;
+        // Strip casas from each project to keep payload small
+        const projects=JSON.parse(raw).map(p=>{
+          const copy=Object.assign({},p);
+          delete copy.casas; // casas se importan via Excel en cada dispositivo
+          return copy;
+        });
+        const url=`${FB_BASE}/global/projects_meta?key=${FB_API_KEY}`;
+        const fields={
+          data: {stringValue: JSON.stringify(projects)},
+          updatedAt: {stringValue: new Date().toISOString()}
+        };
+        const res=await fetch(url,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});
+        if(res.ok) console.log('[SFV Sync] ✅ Project list synced to Firestore');
+        else console.warn('[SFV Sync] ⚠️ writeProjectList HTTP',res.status);
+      }catch(e){ console.warn('[SFV Sync] writeProjectList error:',e.message); }
+    },
+
+    // Pull project list from Firestore and merge with local
+    async pullProjectList(){
+      if(!_online) return;
+      try{
+        const url=`${FB_BASE}/global/projects_meta?key=${FB_API_KEY}`;
+        const res=await fetch(url);
+        if(!res.ok) return;
+        const body=await res.json();
+        if(!body.fields||!body.fields.data||!body.fields.data.stringValue) return;
+        const remote=JSON.parse(body.fields.data.stringValue);
+        if(!Array.isArray(remote)||!remote.length) return;
+        // Merge: remote projects that don't exist locally get added
+        const KMP='sfv_mp_projects_v1';
+        const local=JSON.parse(localStorage.getItem(KMP)||'[]');
+        const localIds=new Set(local.map(p=>p.id));
+        let changed=false;
+        remote.forEach(rp=>{
+          if(rp.id==='arenal_2026') return; // skip built-in
+          const localIdx=local.findIndex(lp=>lp.id===rp.id);
+          if(localIdx===-1){
+            // New project from another device — add it (without casas)
+            local.push(rp);
+            changed=true;
+            console.log('[SFV Sync] 📂 Nuevo proyecto recibido:',rp.name);
+          } else {
+            // Existing project — update metadata (passwords, dates, cuadrillas) if remote is newer
+            const lp=local[localIdx];
+            const rTime=rp.updatedAt||rp.createdAt||'';
+            const lTime=lp.updatedAt||lp.createdAt||'';
+            if(rTime>lTime){
+              // Preserve local casas (they may exist locally but not in sync)
+              const localCasas=lp.casas;
+              Object.assign(lp,rp);
+              if(localCasas&&!lp.casas) lp.casas=localCasas;
+              changed=true;
+            }
+          }
+        });
+        // Also check if remote DELETED a project that exists locally
+        const remoteIds=new Set(remote.map(p=>p.id));
+        // (We don't auto-delete — only add/update. Deletion requires master action.)
+        if(changed){
+          localStorage.setItem(KMP,JSON.stringify(local));
+          showToast('📂 Lista de proyectos actualizada desde otro dispositivo');
+          // Refresh project list UI if panel is open
+          if(typeof renderProjectList==='function'){
+            try{ renderProjectList(); }catch(e){}
+          }
+        }
+      }catch(e){ console.warn('[SFV Sync] pullProjectList error:',e.message); }
+    },
+
     // Legacy stubs
     queueCtrlRecord(){ this.afterSave(); },
     queueCtrlBatch(){  this.afterSave(); },
@@ -4241,26 +4231,6 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
       };
       window.saveControl._sfvPatched = true;
       console.log('[SFV Sync] ✅ saveControl hook activo');
-    }
-    // ── Patch saveEst → sync estados to Firestore ─────────────────
-    const origEst=window.saveEst;
-    if(origEst && !origEst._sfvPatched){
-      window.saveEst = function(){
-        origEst.apply(this, arguments);
-        if(window.SFV_SYNC) window.SFV_SYNC.writeEstados();
-      };
-      window.saveEst._sfvPatched = true;
-      console.log('[SFV Sync] ✅ saveEst hook activo');
-    }
-    // ── Patch saveEd → sync edits to Firestore ────────────────────
-    const origEd=window.saveEd;
-    if(origEd && !origEd._sfvPatched){
-      window.saveEd = function(){
-        origEd.apply(this, arguments);
-        if(window.SFV_SYNC) window.SFV_SYNC.writeEdits();
-      };
-      window.saveEd._sfvPatched = true;
-      console.log('[SFV Sync] ✅ saveEd hook activo');
     }
   }
 
@@ -4636,7 +4606,8 @@ function saveMultiProject(){
     dailyTarget: parseInt(document.getElementById('mpf-daily')?.value)||0,
     cuadrillas, passwords, isBuiltIn:false,
     casas: casas||(_mpEditingId?getAllProjects().find(p=>p.id===_mpEditingId)?.casas:null),
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
   const all=getAllProjects().filter(p=>p.id!=='arenal_2026');
   const idx=all.findIndex(p=>p.id===proj.id);
@@ -4659,6 +4630,8 @@ function saveMultiProject(){
   }
   _renderDirQTabs();
   showToast('✅ Proyecto "'+name+'" guardado y cargado');
+  // ── Sync project list to Firestore ──
+  if(window.SFV_SYNC&&typeof window.SFV_SYNC.writeProjectList==='function') window.SFV_SYNC.writeProjectList();
   if(isNew){
     const lines=cuadrillas.map(q=>'  C'+q.id+' ('+q.name+'): '+passwords['c'+q.id]).join('\n');
     setTimeout(()=>{
@@ -4701,6 +4674,8 @@ function deleteProject(id){
   }
   renderProjectList();
   showToast('🗑️ Proyecto "'+p.name+'" eliminado');
+  // ── Sync project list to Firestore ──
+  if(window.SFV_SYNC&&typeof window.SFV_SYNC.writeProjectList==='function') window.SFV_SYNC.writeProjectList();
 }
 
 // ── Excel import for new project ─────────────────────────────────
