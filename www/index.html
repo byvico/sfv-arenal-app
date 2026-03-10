@@ -14,11 +14,91 @@
 <title>Dashboard SFV — Municipio de Arenal</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/icon-192.png">
+<!-- ═══ DETECCIÓN TEMPRANA MODO GPS POPUP ═══ -->
+<!-- Si la URL tiene ?sfvgps=1, mostrar UI GPS mínima en lugar del dashboard completo -->
+<script>
+(function(){
+  if(new URLSearchParams(location.search).get('sfvgps') !== '1') return;
+  // Modo popup GPS — reemplazar página completa con UI mínima
+  document.addEventListener('DOMContentLoaded', function(){
+    document.title = '📍 GPS — SFV Arenal';
+    document.head.innerHTML = '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>📍 GPS — SFV</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#0d2318;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center}h2{color:#4CAF50;margin-bottom:14px;font-size:22px}#status{font-size:14px;margin:12px 0;min-height:44px;line-height:1.6;color:#ccc}#coords{font-family:monospace;font-size:15px;background:#1B3A2D;padding:14px 20px;border-radius:10px;margin:10px 0;display:none;border:1px solid #2E7D32}#coords b{color:#4CAF50}.btn{background:#2E7D32;color:#fff;border:none;border-radius:8px;padding:11px 26px;font-size:14px;cursor:pointer;margin:6px 4px;min-width:130px}.btn:disabled{opacity:.4}.btn.gray{background:#424242}.btn.blue{background:#1565C0}#manualBox{display:none;margin-top:12px;background:#112a1f;border-radius:8px;padding:12px;width:100%}#manualBox input{background:#0d2318;color:#fff;border:1px solid #2E7D32;border-radius:6px;padding:8px 10px;width:calc(50% - 6px);font-size:13px;margin:3px}#manualBox p{font-size:11px;color:#aaa;margin-top:6px}</style>';
+    document.body.innerHTML = '<h2>📍 Capturar Ubicación GPS</h2><div id="status">⏳ Solicitando permiso...<br><small>Acepta cuando Chrome lo pida</small></div><div id="coords"><b>Lat:</b> <span id="latVal">—</span>°<br><b>Long:</b> <span id="lngVal">—</span>°<br><small id="accVal" style="color:#aaa">calculando precisión...</small></div><button class="btn" id="retryBtn" onclick="tryGPS()" disabled>🔄 Reintentar GPS</button><button class="btn gray" onclick="tryClose()">✕ Cerrar</button><button class="btn blue" style="font-size:12px;min-width:auto;padding:8px 14px" onclick="document.getElementById(\'manualBox\').style.display=\'block\'">✏️ Ingresar manual</button><div id="manualBox"><p style="margin-bottom:8px;color:#eee">Ingresa coordenadas manualmente:</p><input id="mLat" type="number" step="any" placeholder="Latitud ej: 8.519327"><input id="mLng" type="number" step="any" placeholder="Longitud ej: -74.190307"><br><button class="btn blue" style="margin-top:8px" onclick="applyManual()">✅ Aplicar</button><p>Abre Google Maps → mantén presionado → copia coordenadas</p></div>';
+    function tryClose(){
+      window.close();
+      setTimeout(()=>{ document.getElementById('status').innerHTML='✅ GPS guardado.<br><small style="color:#aaa">Cierra esta pestaña con el botón ← Atrás.</small>'; }, 600);
+    }
+    function sendBack(data){
+      // Mismo origen → llamada directa al opener (más confiable)
+      if(window.opener && !window.opener.closed){
+        try{
+          if(typeof window.opener._sfvGpsCallback==='function'){
+            window.opener._sfvGpsCallback(data);
+            document.getElementById('status').innerHTML='✅ Coordenadas enviadas al dashboard. Cerrando...';
+            setTimeout(tryClose, 1500);
+            return;
+          }
+          // Si el opener es el iframe dentro de Wix, intentar llegar via frames
+          if(window.opener.frames){
+            for(let i=0;i<window.opener.frames.length;i++){
+              try{
+                if(typeof window.opener.frames[i]._sfvGpsCallback==='function'){
+                  window.opener.frames[i]._sfvGpsCallback(data);
+                  document.getElementById('status').innerHTML='✅ Coordenadas enviadas. Cerrando...';
+                  setTimeout(tryClose,1500);
+                  return;
+                }
+              }catch(fe){}
+            }
+          }
+        }catch(e){ console.warn('opener direct failed:',e); }
+        // postMessage como fallback
+        try{ window.opener.postMessage({type:'SFV_GPS',data:data},'*'); }catch(e2){}
+      }
+      // localStorage (mismo origen garantizado — no blob:)
+      try{ localStorage.setItem('sfv_gps_popup_v1', JSON.stringify(data)); }catch(e){}
+      document.getElementById('status').innerHTML='✅ GPS capturado. Puedes cerrar esta ventana.';
+      document.getElementById('coords').style.display='block';
+      setTimeout(tryClose, 2000);
+    }
+    window.tryClose = tryClose;
+    window.sendBack = sendBack;
+    window.tryGPS = function(){
+      document.getElementById('retryBtn').disabled=true;
+      document.getElementById('status').innerHTML='⏳ Obteniendo ubicación GPS...';
+      document.getElementById('coords').style.display='none';
+      if(!navigator.geolocation){ document.getElementById('status').innerHTML='❌ GPS no disponible'; document.getElementById('retryBtn').disabled=false; return; }
+      navigator.geolocation.getCurrentPosition(pos=>{
+        const lat=parseFloat(pos.coords.latitude.toFixed(7));
+        const lng=parseFloat(pos.coords.longitude.toFixed(7));
+        const acc=Math.round(pos.coords.accuracy);
+        document.getElementById('latVal').textContent=lat;
+        document.getElementById('lngVal').textContent=lng;
+        document.getElementById('accVal').textContent='±'+acc+'m de precisión';
+        document.getElementById('coords').style.display='block';
+        document.getElementById('retryBtn').disabled=false;
+        sendBack({lat,lng,acc,ts:new Date().toISOString()});
+      },err=>{
+        const msgs={1:'Permiso denegado — activa ubicación en Ajustes → Chrome → Permisos.',2:'Señal GPS no disponible.',3:'Tiempo agotado.'};
+        document.getElementById('status').innerHTML='⚠️'+(msgs[err.code]||err.message);
+        document.getElementById('retryBtn').disabled=false;
+        if(err.code===1) document.getElementById('manualBox').style.display='block';
+      },{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+    };
+    window.applyManual = function(){
+      const lat=parseFloat(document.getElementById('mLat').value);
+      const lng=parseFloat(document.getElementById('mLng').value);
+      if(isNaN(lat)||isNaN(lng)){alert('Ingresa coordenadas válidas');return;}
+      sendBack({lat,lng,acc:999,ts:new Date().toISOString()});
+    };
+    window.tryGPS();
+  });
+  // Detener la carga de CSS/JS pesado no necesario en modo GPS
+  window._SFV_GPS_MODE = true;
+})();
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<!-- Firebase SDK v9 compat (necesario para firebase-sync.js) -->
-<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-storage-compat.js"></script>
+<!-- Sync: Firestore REST API (no SDK — evita bloqueos de pestañas) -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -351,10 +431,12 @@ button,select,.bs,.bdel,.bfile,.bsave,.btn,.mcls{-webkit-tap-highlight-color:tra
     <div class="ni" onclick="showSection('directorio',this)"><span>🏠</span> Directorio</div>
     <div class="ni" onclick="showSection('reportes',this)"><span>📥</span> Reportes</div>
     <div class="nsec" style="margin-top:5px">Cuadrillas</div>
-    <div class="ni"><span class="dot" style="background:#2E7D32"></span>C1 — Sur Occ.</div>
-    <div class="ni"><span class="dot" style="background:#1565C0"></span>C2 — Centro Occ.</div>
-    <div class="ni"><span class="dot" style="background:#E65100"></span>C3 — Centro Nor.</div>
-    <div class="ni"><span class="dot" style="background:#6A1B9A"></span>C4 — Nor. Oriente</div>
+    <div id="sidebarCuadrillas">
+      <div class="ni"><span class="dot" style="background:#2E7D32"></span>C1 — Sur Occ.</div>
+      <div class="ni"><span class="dot" style="background:#1565C0"></span>C2 — Centro Occ.</div>
+      <div class="ni"><span class="dot" style="background:#E65100"></span>C3 — Centro Nor.</div>
+      <div class="ni"><span class="dot" style="background:#6A1B9A"></span>C4 — Nor. Oriente</div>
+    </div>
     <div class="nsec master-only" style="margin-top:5px">Administración</div>
     <div class="ni master-only" onclick="openMultiProjectPanel()"><span>📂</span> Gestionar Proyectos</div>
     <div class="ni master-only" onclick="openPwdPanel()"><span>⚙️</span> Panel contraseñas</div>
@@ -388,11 +470,11 @@ button,select,.bs,.bdel,.bfile,.bsave,.btn,.mcls{-webkit-tap-highlight-color:tra
 
     <!-- KPIs -->
     <div class="krow">
-      <div class="kcard c1"><div class="klbl">Total Sistemas</div><div class="kval" style="color:var(--c1)">267</div><div class="ksub">SFV individuales</div></div>
+      <div class="kcard c1"><div class="klbl">Total Sistemas</div><div class="kval" style="color:var(--c1)" id="kpi-total">267</div><div class="ksub" id="kpi-sub-total">SFV individuales</div></div>
       <div class="kcard c2"><div class="klbl">Instaladas</div><div class="kval" style="color:var(--c2)" id="kpi-inst">0</div><div class="ksub">Energizadas + Instaladas</div></div>
       <div class="kcard c1"><div class="klbl">Restantes</div><div class="kval" style="color:var(--c1)" id="kpi-rest">267</div><div class="ksub">Por instalar</div></div>
-      <div class="kcard c3"><div class="klbl">Prod. Diaria</div><div class="kval" style="color:var(--c3)">4</div><div class="ksub">Casas/día (mín)</div></div>
-      <div class="kcard c4"><div class="klbl">Prod. Semanal</div><div class="kval" style="color:var(--c4)">22</div><div class="ksub">Casas/semana</div></div>
+      <div class="kcard c3"><div class="klbl">Prod. Diaria</div><div class="kval" style="color:var(--c3)" id="kpi-daily">4</div><div class="ksub">Casas/día (mín)</div></div>
+      <div class="kcard c4"><div class="klbl">Prod. Semanal</div><div class="kval" style="color:var(--c4)" id="kpi-weekly">22</div><div class="ksub">Casas/semana</div></div>
       <div class="kcard gold"><div class="klbl">% Avance</div><div class="kval" style="color:#F57F17" id="kpi-pct">0%</div><div class="ksub" id="kpi-sub-pct">Sem. 0 de 12</div></div>
     </div>
 
@@ -409,7 +491,7 @@ button,select,.bs,.bdel,.bfile,.bsave,.btn,.mcls{-webkit-tap-highlight-color:tra
           </div>
         </div>
         <div id="map"></div>
-        <div class="mleg">
+        <div class="mleg" id="mapLegend">
           <div class="li"><div class="ldot" style="background:var(--c1)"></div>C1 Sur Occ. (67)</div>
           <div class="li"><div class="ldot" style="background:var(--c2)"></div>C2 Centro Occ. (68)</div>
           <div class="li"><div class="ldot" style="background:var(--c3)"></div>C3 Centro Nor. (67)</div>
@@ -418,7 +500,7 @@ button,select,.bs,.bdel,.bfile,.bsave,.btn,.mcls{-webkit-tap-highlight-color:tra
       </div>
       <div class="card">
         <div class="chd"><div class="ctitle">👷 Distribución por Cuadrilla</div></div>
-        <div class="cbody">
+        <div class="cbody" id="qDistContainer">
           <div class="ci"><div class="chdr"><div style="font-size:11px;font-weight:600"><span class="chip" style="background:var(--c1)"></span>C1 — Sur Occidente</div><div style="font-family:'Syne',sans-serif;font-size:15px;font-weight:800;color:var(--c1)">67</div></div><div style="font-size:9px;color:var(--mt);margin-bottom:2px">La Cañada · La Jungla · Sereno</div><div class="cbarbg"><div class="cbarfill" style="width:25.1%;background:var(--c1)"></div></div></div>
           <div class="ci"><div class="chdr"><div style="font-size:11px;font-weight:600"><span class="chip" style="background:var(--c2)"></span>C2 — Centro Occidente</div><div style="font-family:'Syne',sans-serif;font-size:15px;font-weight:800;color:var(--c2)">68</div></div><div style="font-size:9px;color:var(--mt);margin-bottom:2px">Santo Domingo · Zabaleta · Muela</div><div class="cbarbg"><div class="cbarfill" style="width:25.5%;background:var(--c2)"></div></div></div>
           <div class="ci"><div class="chdr"><div style="font-size:11px;font-weight:600"><span class="chip" style="background:var(--c3)"></span>C3 — Centro Norte</div><div style="font-family:'Syne',sans-serif;font-size:15px;font-weight:800;color:var(--c3)">67</div></div><div style="font-size:9px;color:var(--mt);margin-bottom:2px">La Dorada · Soya · Unión Dorada · Sabana Alta</div><div class="cbarbg"><div class="cbarfill" style="width:25.1%;background:var(--c3)"></div></div></div>
@@ -478,10 +560,7 @@ button,select,.bs,.bdel,.bfile,.bsave,.btn,.mcls{-webkit-tap-highlight-color:tra
       </div>
       <div style="display:flex;gap:0;border-bottom:2px solid var(--brd);background:var(--bg)">
         <button class="cq-tab" data-f="all" onclick="setCQTab('all',this)" style="padding:10px 16px;border:none;background:none;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;cursor:pointer;border-bottom:3px solid var(--acc);color:var(--txt);margin-bottom:-2px">📋 Todas</button>
-        <button class="cq-tab" data-f="1" onclick="setCQTab('1',this)" style="padding:10px 13px;border:none;background:none;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;cursor:pointer;border-bottom:3px solid transparent;color:var(--mt);margin-bottom:-2px"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--c1);margin-right:4px"></span>C1 <span id="cq1-cnt"></span></button>
-        <button class="cq-tab" data-f="2" onclick="setCQTab('2',this)" style="padding:10px 13px;border:none;background:none;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;cursor:pointer;border-bottom:3px solid transparent;color:var(--mt);margin-bottom:-2px"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--c2);margin-right:4px"></span>C2 <span id="cq2-cnt"></span></button>
-        <button class="cq-tab" data-f="3" onclick="setCQTab('3',this)" style="padding:10px 13px;border:none;background:none;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;cursor:pointer;border-bottom:3px solid transparent;color:var(--mt);margin-bottom:-2px"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--c3);margin-right:4px"></span>C3 <span id="cq3-cnt"></span></button>
-        <button class="cq-tab" data-f="4" onclick="setCQTab('4',this)" style="padding:10px 13px;border:none;background:none;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;cursor:pointer;border-bottom:3px solid transparent;color:var(--mt);margin-bottom:-2px"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--c4);margin-right:4px"></span>C4 <span id="cq4-cnt"></span></button>
+        <div id="dirQTabs" style="display:contents"><!-- rendered dynamically by _renderDirQTabs() --></div>
       </div>
       <div id="cq-banner" style="display:none"></div>
       <div class="dtoolbar">
@@ -499,6 +578,7 @@ button,select,.bs,.bdel,.bfile,.bsave,.btn,.mcls{-webkit-tap-highlight-color:tra
         <table class="dir">
           <thead><tr>
             <th onclick="sortDir('id')">#Item <span class="sarr" id="sa-id">↕</span></th>
+            <th onclick="sortDir('cedula')">Cédula <span class="sarr" id="sa-cedula">↕</span></th>
             <th onclick="sortDir('nombre')">Nombre <span class="sarr" id="sa-nombre">↕</span></th>
             <th onclick="sortDir('cuadrilla')">Cuadrilla <span class="sarr" id="sa-cuadrilla">↕</span></th>
             <th onclick="sortDir('vereda')">Vereda <span class="sarr" id="sa-vereda">↕</span></th>
@@ -542,7 +622,8 @@ button,select,.bs,.bdel,.bfile,.bsave,.btn,.mcls{-webkit-tap-highlight-color:tra
         🔑 <strong>Modo Administrador</strong> — Puedes editar todos los campos de este usuario, incluyendo cuadrilla y vereda.
       </div>
       <div style="font-size:10px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.4px;margin:10px 0 7px">✏️ Editar datos del usuario</div>
-      <!-- Nombre -->
+      <!-- Cédula + Nombre -->
+      <div class="ef"><label>Cédula / Documento</label><input type="text" id="eCedula" placeholder="Número de cédula o CC" style="font-family:monospace"></div>
       <div class="ef"><label>Nombre del usuario</label><input type="text" id="eNombre" placeholder="Nombre completo"></div>
       <!-- Cuadrilla + Vereda (master only) -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
@@ -829,8 +910,16 @@ const VEREDAS=[
   {name:'La Bonita',q:4,t:13},{name:'La Envidia',q:4,t:13},{name:'Sabana Baja',q:4,t:15},{name:'San Agustín',q:4,t:21},{name:'Tequendama',q:4,t:3}
 ];
 const VC={'La Cañada':[8.370,-74.195],'La Jungla':[8.355,-74.200],'Sereno':[8.350,-74.210],'Santo Domingo':[8.380,-74.160],'Zabaleta':[8.360,-74.175],'Muela':[8.365,-74.155],'La Dorada':[8.340,-74.165],'Soya':[8.345,-74.185],'Unión Dorada':[8.330,-74.170],'Sabana Alta':[8.325,-74.180],'La Bonita':[8.410,-74.145],'La Envidia':[8.420,-74.135],'Sabana Baja':[8.400,-74.155],'San Agustín':[8.395,-74.140],'Tequendama':[8.385,-74.145]};
-const QN={1:'Sur Occidente',2:'Centro Occidente',3:'Centro Norte',4:'Norte Oriente'};
-const QC={1:'#2E7D32',2:'#1565C0',3:'#E65100',4:'#6A1B9A'};
+let QN={1:'Sur Occidente',2:'Centro Occidente',3:'Centro Norte',4:'Norte Oriente'};
+let QC={1:'#2E7D32',2:'#1565C0',3:'#E65100',4:'#6A1B9A'};
+// Helper: IDs de cuadrillas del proyecto activo
+function _getActiveQIds(){
+  try{
+    const p=(typeof getActiveProject==='function')?getActiveProject():null;
+    if(p&&p.cuadrillas&&p.cuadrillas.length) return p.cuadrillas.map(q=>q.id);
+  }catch(e){}
+  return [1,2,3,4];
+}
 const QI={1:{n:'Cuadrilla 1',z:'Sur Occidente',v:'La Cañada, La Jungla, Sereno',t:67},2:{n:'Cuadrilla 2',z:'Centro Occidente',v:'Santo Domingo, Zabaleta, Muela',t:68},3:{n:'Cuadrilla 3',z:'Centro Norte',v:'La Dorada, Soya, Unión Dorada, Sabana Alta',t:67},4:{n:'Cuadrilla 4',z:'Norte Oriente',v:'La Bonita, La Envidia, Sabana Baja, San Agustín, Tequendama',t:65}};
 const NOM=["LASTENIA MARQUESA HERRERA TRIGOS","OFELIA CASTAÑO DE LA HOZ","EDINSON MANUEL OROZCO SARMIENTO","KEIDYS JOHANA VELASQUEZ CARBAJALINO","DIONISIO VARGAS CARO","CATERINE QUEVEDO MATTA","AMINTO VALENCIA","CATANINA JIMENEZ ROMERO","JOSE LUIS SIERRA TRILLOS","EDINSON RIOS VELASQUEZ","MARTIN FUENTES SANCHEZ","JADI RIOS VELASQUEZ","BEISAI LOBO TRILLOS","FELIPA TAPIA VERGARA","ISRAEL MACIAS PACHECO","OSCAR DARIO MERCADO VIVERO","MIGUEL CALDERON MENDES","YAJAIRA MILENA ESTEBAN PINZON","LUIS ALBERTO PIEDRAHITA PEÑA","JAISON JESUS LEDESMA SANABRIA","ELSY FLOREZ PACHECO","JOSE IGNACIO LEDESMA CONTRERA","EUGENIO SANABRIA","SONIA JIMENES GARCIAS","YAQUELINE SEPULVEDA NIETO","EDGAR CAMPUZANO LOBO","FLOR DE MARIA SEPULVEDA NIETO","EDRY CILENI CONTRERA","DIANA PATRICIA GARCIA CRUZ","OSCAR ANTONIO CRUZ POLO","GEINER CHACON ORTIZ","INGRIS JHOHANA DE LEON ORTIZ","JONER MONTALVO BARGAS","JOSE IGNACIO LEDESMA SANABRIA","DEIDI ELENA PEREZ DIAZ","GERSON JIMENES MASIAS","MARTIN BETANCUR BARRIOS","REYES ANTONIO MAURELLO CASTRO","OTILIO RINCO PEREZ","YERSON ANDRES RINCON SANGUINO","JOSE DAVID RINCON SANGUINO","NUBIA SANGUINO ACEVEDO","OSNEIDER CASTRO RAMOS","DANERIS DEL CARMEN CEBALLOS MARTINEZ","CARLOS FELIPE RAMOS RAMOS","JOSE LUIS POLANCO ACOSTA","ALEJANDRO GARCIAS ARANDA","RAMIRO ARANDA HERNANDEZ","JOSUE DAVID GARCIA ARANDA","CARMEN ALICIA GARCIA ARANDA","ARGEMIRO ANTONIO BERRIO","FRANKLIN CENTENO FONSECA","FRANCISCO EMILIO GARCIAS ARANDA","IRENE ANGARITA RIVERA","DINERYS PEREZ ANGARITA","JOSE FERNEY RIOS CORTES","EZEQUIEL RINCON SANGUINO","FREDY REY SEPULVEDA","DAMARIS ANTONIO HERNANDES TAPIA","JOSE BERTULFO RODRIGUEZ RAMOS","JORGE RAMON OLARTE MELO","ROBINSON RODRIGUEZ TELLEZ","RAMON SANTANA CENTENO","JHON JAIRO GOMEZ JAIMES","NUBIA GOMEZ JAIMES","YULIETH MORALES BUSTOS","LUZ DARY ROMERO MORENO","KEIDYS SAN JUAN QUINTERO","LILIBETH QUINTERO PALLARES","SANDRITH SAN JUAN JULIO","ELICECER RODRIGUEZ QUINTERO","LUIS ENRRIQUE RODRIGUEZ RAMOS","SANTO RINCON LEMUS","GABRIEL FLOREZ PEÑA","JAIRO JIMENEZ VILLAMIZAR","JUAN RIVERA PIMIENTA","ISABELA PALLARES GONZALES","YEISSI ESPINOSA ALFONSO","JUAN DAVID MONTES GRIMALDO","IRENE TELLEZ PEREZ","FRANCO PABUENA LOBO","MARIA ARGELIA PIMIENTA PEÑA","DORIS CASTROS DE RODRIGUEZ","CARLOS PEREZ GRANADOS","YEISI INES BALLONA DUARTE","YONIS MUÑOZ RUIZ","REINALDO PEREZ RUEDA","ARIEL SANABRIA PIMIENTA","VICTOR RODRIGUEZ RAMOS","ENY SANDRITH PALLARES NARANJO","ANA ELVIA PEÑA CAÑIZARES","YEISON ANDRES RODRIGUEZ PEÑA","LEOXANDER GONZALES RANGEL","JOSE OSVALDO SEVILLA AGUILAR","VIVIANA ARRIOLA SALAS","JULIO VERGARA PEREZ","WILLIAM ESTEBAN ZULETA SANCHEZ","SAUL HURTADO PEÑALOZA","DEIVINSON VELASQUEZ JIMENEZ","MARIA TEODORA VARGAS CORREA","LUIS ANGEL VEGA VILLALVA","EDILSON GUEVARA MOLINA","LUIS CARLOS MENDES TOVAR","JAIDER AREVALO VENECIA","DEINER SEVILLA CAMPUZANO","MARIA EGENIA DALGUA ULCUE","NICOL PAOLA SOLER PEREZ","LIDIANA MARTINEZ HERRERA","JESUS ANTONIO CATEÑEDA PALLARES","NEFTALI QUINTERO CELIS","ROBINSON FELIZZOLA CASTRO","LUIS JOSE FELIZZOLA CASTRO","JOSE SERAFIN FELIZZOLA CASTRO","ESTHER TELLEZ FLOREZ","ROBERTO CALDERON RODRIGUEZ","JESUS DAVID GUTIERREZ PARRA","LEOANGEL ASCANIO GUERRERO","LUIS ALFONSO TELLES GUERRERO","WENDYS GUTIERRES PARRA","YEINY RAMIREZ ORTEGA","INAEL RAMIREZ VERA","YIMY ALFONSO BAUTISTA BASTIDAS","CLAUDIA GERARDINO CONTRERAS","SAUL FONSECA PEÑA","DIONOSIO MERIÑO ACOSTA","OSMAN FLOREZ GRIMALDO","JULIO ROMERO FLOREZ","LUIS ANTONIO SANABRIA GUERRERO","GILBERTO VELASQUEZ ALTAMAR","GERVACIO HERNANDEZ","WILFRIDO PACHECO BELTRAN","LUZ MERY LERMA ZAYAS","MARIA JOSE CAMPO HERNANDEZ","PEDRO FRANCO RIOS","BLADIMIR SIERRA PEÑALOSA","JOSE PADILLAS VARGAS","GERARDO PADILLA VARGAS","NANCY PADILLA VARGAS","MANUELA VELASQUEZ FLOREZ","MILCIADES CAMPUZANO JIMENEZ","LUZ DARY HERNANDEZ PEREZ","NEIDER SANCHEZ CONTRERAS","YIRA CONTRERAS VELASQUEZ","IDALIDES HERNANDEZ CAMPO","YORGELIS MARTINEZ OLAVE","DEIBER PEÑA VEGA","ELOISA RINCON PEREZ","EDID QUINTERO","EIDER ROMERO CONTRERAS","JEIDYS TRILLO GUEVARA","JONATHAN ZULETA MUÑOZ","ALEIDA JIMENEZ HENAO","ROBERT BENAVIDES VELAIDEZ","JORGE MORENO FLOREZ","GEINER TELLEZ PINEDA","EDINSON PINEDA MANJARREZ","MERLIS MARIA LEDESMA SANABRIA","LEIDY LUZ NARVAEZ PUCHE","FRAN DAVID TORRES GRACIANO","DOMINGO DARIO MOSQUERA PEREA","ANA ELVIA ROPERO CORONEL","LAUDITH CARDENAS NAVARRO","CELMIRA DEL CARMEN LONDOÑO MORENO","NELSON ENRIQUE CASARUBIA VILLALBA","JHON JAIDER BELTRAN","LILIBETH BARRIOS MARTINEZ","JAIRO CONTRERAS CARRASCAL","PABLO MACIAS BAUTISTA","NAUDIT BELTRAN VELILLA","GRISELDA SANTANA FORERO","GERARDO RAMIREZ BERMUDEZ","ADAN PRADA","JOSE ADAN PRADA GONZALES","JORGE BEDOYA JARAMILLO","ESMERALDA PRADA GONZALES","ANGEL ALBERTO CASTELLANO","ALVARO GRAU BUELVAS","ALEX ALFREIDE TORIZO VILLANCA","OLIVO RINCON PEREZ","JHON HENRRY PARADA ROMERO","CARLOS ARBEY PARADA GOMEZ","FAUSTINO PARADA REINA","YENNY SIZA RODRIGUEZ","LUIS EMILIO LOPEZ MUÑOZ","LUIS EDUARDO LOPEZ MUÑOZ","ARELIANO SUAREZ REAL","FABIAN SUAREZ REAL","SAMUEL DIAZ","LAURINO FLOREZ","ELBER PEÑA","PETRONA FONSECA TAFUR","ROSALBA AREVALO VILA","YULIS ESTHER MENDOZA MENDOZA","YENIS GARCIA TOVAR","ELI ALFONSO LEMUS ORTIZ","LUCIANO PIÑUELA GIL","MILDONIA PEÑUELA GIL","MOISES DIAS MEZA","ALEXANDER URIBE ROZO","JOSE PACHECO TORO","GEOVANI GRANADOS GRIMALDO","ALFREDO PALENCIA GRANADOS","FRANCISCO BANDERA CLAVIJO","ROSA EDITH RODRIGUEZ ROJAS","YANITZA AMARIS SIERRA","YARLINIS RIVERA HERNANDEZ","ANA MARIA PALLARES MEDINA","ELICENIA ROBLES RODRIGUEZ","YULIXY PAOLA GALVAN VACA","ALBINO PEÑUELA GIL","JOSE OMAR CAMELO RODRIGUEZ","ADOLFO TULIO BORRE VARGAS","ADOLFO BORRE LOPEZ","SALOME OLAVE AGUIRRE","JUAN ALBERTO ESPEJO","VICTOR PEÑA ANGEL","RUBY FABIANA BOLAÑOS LOZANO","ANDERSON SUMAOLAVE QUIENTERO","FARNER RODRIGUEZ ORTIZ","MIGUEL ANGEL CAMELO PORTILLO","JUAN PABLO URREA RAMIREZ","ANA YULIEIDIS FELIZZOLA ASCANIO","JHON EDINSON JAIMES SUAREZ","JOSE DAVID SANDOVAL FAJARDO","EVER JAIMES GONZALES","MIRIAN CAMELO RODRIGUEZ","MARIA DEL ROSARIO CAMELO BARBOSA","MANUEL HERRERA ANGARITA","SERGIO ANDRES QUINTERO PINEDA","ELVIS FLOREZ GARCIAS","HIPOLITO RAMIREZ VERA","RAFAEL BANDA SIERRA","YORLI GELVES TABORDA","OBIDIO CARRACAL GALVAN","JAIRO PABON JAIME","JESUS ANTONIO JAIME GELVES","MILEIDYS PABON JAIME","ANA MARIA PALLARES PABON","JOSE MANUEL CHIQUILLO","YESENIA LIZARAZO MUÑOZ","ENEDITH ORTEGA RAMIREZ","LEDIN RAMIREZ ORTEGA","ALIRIO VARGAS ALFONSO","MILADYS SIERRA YARURO","LAURA MILENA PERILLA ALARCON","ALFREDO VEGA RODRIGUEZ","ELODIA RAMIREZ DE GELVES","AIDA LUZ ALZATE GRIMALDO","ELIO ORTEGA RAMIREZ","BERTHA DOLLY GARCIA VALENCIA","JESUS EMILIO SANQUINEO HERNANDEZ","MARIA SENAIDA VEGAS ALFONSO","EPIDIA MONDRAGON","LUIS EVELIO ESCOBAR TOMBE","JAIR QUINTERO CONTRERA","MERCEDEZ RAMIREZ ORTEGA","OVIDIO JIMENEZ JIMENEZ","VIRGELINO GALVIZ VAZQUES","JESUS ALBERTO GELVES GALVIS","ELISA ORTEGA RAMIREZ","JHON HENRRY JIMENEZ ORTEGA","COSME PABON","VICTOR JULIO CARRASCAL ASCANIO","BAIRON ALONSO JARRAMILLO","DANIEL ZUÑIGA VERA","MANUEL PABON JAIMES","OSCAR ZUÑIGA PAEZ"];
 
@@ -840,6 +929,20 @@ function rnd(m){return(Math.random()-.5)*m;}
 // ══════════════════════════════════════════════════════════════
 // Detectar si estamos en contexto iframe (Wix)
 function _inIframe(){ try{ return window.self!==window.top; }catch(e){ return true; } }
+
+// ── Detecta si la API de geolocalización está disponible ──────────────
+// En APK Capacitor: el WebView tiene acceso directo al GPS de Android (sin popup)
+// En Wix iframe: bloqueado por el sandbox del iframe
+function _gpsApiAvailable(){
+  if(!navigator.geolocation) return false;
+  if(typeof window.Capacitor !== 'undefined') return true; // APK siempre OK
+  // En HTTPS el navegador permite GPS en cualquier contexto (iframe o no).
+  // El aviso "peligroso" de Chrome es solo la solicitud de permiso — es normal
+  // y desaparece una vez el usuario lo permite por primera vez.
+  if(location.protocol === 'https:') return true;
+  // HTTP o archivo local: solo disponible fuera de iframe
+  try{ return window.self === window.top; }catch(e){ return false; }
+}
 
 function sfvDownload(filename, blobOrUrl){
   return new Promise((resolve)=>{
@@ -882,12 +985,26 @@ function sfvDownload(filename, blobOrUrl){
 }
 
 function sfvSavePDF(doc, filename){
-  if(_inIframe()){
-    // En Wix: abre PDF en nueva pestaña para que el usuario lo guarde
-    try{ doc.output('dataurlnewwindow'); return; }catch(e){}
+  try{
+    // En Wix iframe: <a download> está bloqueado. Usar doc.save() de jsPDF que maneja internamente.
+    if(_inIframe()){
+      // jsPDF .save() en iframe abre descarga del navegador (no popup)
+      doc.save(filename);
+      showToast('📄 PDF generado — revisa Descargas');
+      return;
+    }
+    // Fuera de iframe (hosting/APK): blob URL para descarga limpia
+    const blob = doc.output('blob');
+    const burl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = burl; a.download = filename; a.style.display='none';
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(burl); }, 30000);
+    showToast('📄 PDF listo — revisa Descargas');
+  }catch(e){
+    // Fallback absoluto
+    try{ doc.save(filename); }catch(e2){ showToast('❌ Error PDF: '+e2.message); }
   }
-  try{ sfvDownload(filename, doc.output('blob')); }
-  catch(e){ try{ doc.save(filename); }catch(e2){ showToast('❌ Error PDF: '+e2.message); } }
 }
 
 const CASAS=[];let _n=1;
@@ -908,15 +1025,90 @@ function getPwds(){
 }
 function savePwdStore(obj){try{localStorage.setItem(AUTH_KEY,JSON.stringify(obj));}catch(e){}}
 
+// ── Unified password getter/setter (fixes dual-store bug) ──────────
+function getQPwd(q, projectId){
+  const pid = projectId || (typeof getActiveProjectId==='function'?getActiveProjectId():'arenal_2026');
+  if(pid==='arenal_2026'){
+    const global=getPwds();
+    return global['c'+q]||DEFAULT_PWD['c'+q]||'';
+  }
+  const proj=(typeof getAllProjects==='function')?getAllProjects().find(p=>p.id===pid):null;
+  return proj?.passwords?.['c'+q]||'';
+}
+function setQPwd(q, newPwd, projectId){
+  const pid = projectId || (typeof getActiveProjectId==='function'?getActiveProjectId():'arenal_2026');
+  if(pid==='arenal_2026'){
+    const global=getPwds();
+    global['c'+q]=newPwd;
+    savePwdStore(global);
+  } else {
+    try{
+      const all=JSON.parse(localStorage.getItem('sfv_mp_projects_v1')||'[]');
+      const proj=all.find(p=>p.id===pid);
+      if(proj){
+        if(!proj.passwords) proj.passwords={};
+        proj.passwords['c'+q]=newPwd;
+        localStorage.setItem('sfv_mp_projects_v1',JSON.stringify(all));
+      }
+    }catch(e){console.warn('setQPwd error:',e);}
+  }
+}
+
+// Generate random password for cuadrillas (min 10 alphanumeric chars)
+function _genPwd(){
+  const chars='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let p=''; for(let i=0;i<10;i++) p+=chars[Math.floor(Math.random()*chars.length)];
+  return p;
+}
+
+// Get passwords for a specific project (or global)
+function getProjPwds(pid){
+  if(!pid||pid==='arenal_2026') return getPwds();
+  const proj=(typeof getAllProjects==='function')?getAllProjects().find(p=>p.id===pid):null;
+  return proj?.passwords||{};
+}
+
 function doLogin(){
   const pwd=document.getElementById('loginInput').value;
   document.getElementById('loginErr').textContent='';
   if(!pwd){document.getElementById('loginErr').textContent='Ingresa una contraseña';return;}
-  const pwds=getPwds();
-  if(pwd===pwds.master){SESSION={role:'master',cuadrilla:null,name:'Byron Vizcaíno',canEdit:true};startApp();return;}
-  for(let c=1;c<=4;c++){if(pwd===pwds['c'+c]){SESSION={role:'cuadrilla',cuadrilla:c,name:'Cuadrilla '+c,canEdit:true};startApp();return;}}
-  const vis=pwds.visitors.find(v=>v.password===pwd);
+  
+  // 1. Master password (global — same for all projects)
+  const globalPwds=getPwds();
+  if(pwd===globalPwds.master){
+    SESSION={role:'master',cuadrilla:null,name:'Byron Vizcaíno',canEdit:true};
+    startApp(); return;
+  }
+  
+  // 2. Search ALL projects for matching cuadrilla password
+  if(typeof getAllProjects==='function'){
+    const allProjs=getAllProjects();
+    for(const proj of allProjs){
+      const ppwds=proj.passwords||{};
+      for(let q=1;q<=8;q++){
+        if(ppwds['c'+q]&&pwd===ppwds['c'+q]){
+          // Auto-switch to this project
+          localStorage.setItem('sfv_mp_active_v1', proj.id);
+          const cuadrilla=proj.cuadrillas?proj.cuadrillas.find(x=>x.id===q):null;
+          SESSION={role:'cuadrilla',cuadrilla:q,name:(cuadrilla?.name||'Cuadrilla '+q),canEdit:true,projectId:proj.id};
+          startApp(); return;
+        }
+      }
+    }
+  }
+  
+  // 3. Legacy: old-style global cuadrilla passwords (for Arenal backward compat)
+  for(let q=1;q<=4;q++){
+    if(pwd===globalPwds['c'+q]){
+      SESSION={role:'cuadrilla',cuadrilla:q,name:'Cuadrilla '+q,canEdit:true,projectId:'arenal_2026'};
+      startApp(); return;
+    }
+  }
+  
+  // 4. Visitor passwords
+  const vis=globalPwds.visitors?.find(v=>v.password===pwd);
   if(vis){SESSION={role:'visitor',cuadrilla:null,name:vis.name,canEdit:vis.canEdit,visId:vis.id};startApp();return;}
+  
   document.getElementById('loginErr').textContent='❌ Contraseña incorrecta. Intenta de nuevo.';
 }
 function doLoginViewer(){SESSION={role:'viewer',cuadrilla:null,name:'Visitante (solo lectura)',canEdit:false};startApp();}
@@ -1053,7 +1245,7 @@ function getCasas(q){
     return q==='all'||effQ===q;
   }).map(x=>{
     const effQ=casaEd[x.id]?.cuadrilla||x.cuadrilla;
-    return{id:x.id,nombre:casaEd[x.id]?.nombre||x.nombre,cuadrilla:effQ,zona:QN[effQ],vereda:casaEd[x.id]?.vereda||x.vereda,
+    return{id:x.id,cedula:casaEd[x.id]?.cedula||x.cedula||'',nombre:casaEd[x.id]?.nombre||x.nombre,cuadrilla:effQ,zona:QN[effQ],vereda:casaEd[x.id]?.vereda||x.vereda,
       lat:Number(casaEd[x.id]?.lat??x.lat).toFixed(6),lng:Number(casaEd[x.id]?.lng??x.lng).toFixed(6),estado:getEst(x.id)};
   });
 }
@@ -1070,6 +1262,8 @@ function validateRow(q,item){
 }
 function syncEstado(item,estado){
   const id=Number(item);if(!id)return;
+  // Sync estado to casaEst so all views are consistent
+  casaEst[id]=estado; saveEst();
   const casa=CASAS.find(c=>c.id===id);
   if(casa){
     casaEst[id]=estado;saveEst();updateKPIs();renderDir();
@@ -1087,19 +1281,154 @@ function syncEstado(item,estado){
 // KPIs
 // ══════════════════════════════════════════════════════════
 function updateKPIs(){
+  const total = CASAS.length || 267;
   const fromC=new Set(ctrlData.filter(r=>(r.estado==='Instalado'||r.estado==='Energizado')&&r.item).map(r=>Number(r.item)));
   const fromD=Object.entries(casaEst).filter(([,v])=>v==='Instalado'||v==='Energizado').map(([k])=>Number(k));
   const tot=new Set([...fromC,...fromD]).size;
-  const pct=Math.round(tot/267*100);
-  document.getElementById('kpi-inst').textContent=tot;
-  document.getElementById('kpi-rest').textContent=267-tot;
-  document.getElementById('kpi-pct').textContent=pct+'%';
-  document.getElementById('kpi-sub-pct').textContent='Sem. '+Math.max(0,Math.ceil(tot/22))+' de 12';
-  document.getElementById('sb-pct').textContent=pct+'%';
-  document.getElementById('sb-val').textContent=tot+'/267';
-  document.getElementById('sb-fill').style.width=pct+'%';
-  [1,2,3,4].forEach(q=>{const r=getResumen(q);const el=document.getElementById('cq'+q+'-cnt');if(el)el.textContent='('+r.instaladas+'/'+r.total+')';});
+  const pct=Math.round(tot/total*100);
+
+  // Calculate weekly/daily production from project dates
+  const proj = (typeof getActiveProject==='function') ? getActiveProject() : null;
+  let totalWeeks=12, dailyProd=4, weeklyProd=22;
+  // Use master-configured daily target if set
+  if(proj && proj.dailyTarget && proj.dailyTarget > 0){
+    dailyProd = proj.dailyTarget;
+    weeklyProd = dailyProd * 5; // 5 working days
+  }
+  if(proj && proj.installStart && proj.endDate){
+    const ms = new Date(proj.endDate+'T12:00') - new Date(proj.installStart+'T12:00');
+    const days = Math.max(1, Math.round(ms/86400000));
+    totalWeeks = Math.max(1, Math.ceil(days/7));
+    dailyProd = Math.max(1, Math.ceil(total/days));
+    weeklyProd = Math.max(1, Math.ceil(total/totalWeeks));
+  } else if(proj && proj.startDate && proj.endDate){
+    const ms = new Date(proj.endDate+'T12:00') - new Date(proj.startDate+'T12:00');
+    const days = Math.max(1, Math.round(ms/86400000));
+    totalWeeks = Math.max(1, Math.ceil(days/7));
+    dailyProd = Math.max(1, Math.ceil(total/days));
+    weeklyProd = Math.max(1, Math.ceil(total/totalWeeks));
+  }
+
+  const curWeek = Math.max(0, Math.ceil(tot/weeklyProd));
+
+  // Update all KPI elements
+  const el = id => document.getElementById(id);
+  if(el('kpi-total')) el('kpi-total').textContent=total;
+  if(el('kpi-inst')) el('kpi-inst').textContent=tot;
+  if(el('kpi-rest')) el('kpi-rest').textContent=total-tot;
+  if(el('kpi-daily')) el('kpi-daily').textContent=dailyProd;
+  if(el('kpi-weekly')) el('kpi-weekly').textContent=weeklyProd;
+  if(el('kpi-pct')) el('kpi-pct').textContent=pct+'%';
+  if(el('kpi-sub-pct')) el('kpi-sub-pct').textContent='Sem. '+curWeek+' de '+totalWeeks;
+  if(el('sb-pct')) el('sb-pct').textContent=pct+'%';
+  if(el('sb-val')) el('sb-val').textContent=tot+'/'+total;
+  if(el('sb-fill')) el('sb-fill').style.width=pct+'%';
+
+  // Update cuadrilla directorio tab counters
+  _getActiveQIds().forEach(qid=>{
+    const r=getResumen(qid);
+    const elq=document.getElementById('cq'+qid+'-cnt');
+    if(elq) elq.textContent='('+r.instaladas+'/'+r.total+')';
+  });
+
   renderReportesGrid();
+  _renderQDistribution();
+  _renderMapTabs();
+  _renderMapLegend();
+  if(typeof _rebuildAvanceChart==='function') _rebuildAvanceChart();
+}
+
+// ── Render cuadrilla distribution panel dynamically ──────────────
+function _renderQDistribution(){
+  const container = document.getElementById('qDistContainer');
+  if(!container) return;
+  const proj = (typeof getActiveProject==='function') ? getActiveProject() : null;
+  const qs = proj ? (proj.cuadrillas||[]) : [{id:1,name:'C1',zone:'',color:'#2E7D32'},{id:2,name:'C2',zone:'',color:'#1565C0'},{id:3,name:'C3',zone:'',color:'#E65100'},{id:4,name:'C4',zone:'',color:'#6A1B9A'}];
+  const total = CASAS.length||1;
+  // Build vereda labels per cuadrilla
+  const qVeredas = {};
+  CASAS.forEach(c=>{ if(!qVeredas[c.cuadrilla]) qVeredas[c.cuadrilla]=new Set(); qVeredas[c.cuadrilla].add(c.vereda); });
+  let html = qs.map(q=>{
+    const r=getResumen(q.id);
+    const pct=Math.round(r.total/total*100);
+    const color=q.color||QC[q.id]||'#2E7D32';
+    const veredas=[...(qVeredas[q.id]||[])].join(' · ')||q.zone||'';
+    return `<div class="ci">
+      <div class="chdr">
+        <div style="font-size:11px;font-weight:600"><span class="chip" style="background:${color}"></span>C${q.id} — ${q.name||('Cuadrilla '+q.id)}</div>
+        <div style="font-family:'Syne',sans-serif;font-size:15px;font-weight:800;color:${color}">${r.total}</div>
+      </div>
+      <div style="font-size:9px;color:var(--mt);margin-bottom:2px">${veredas}</div>
+      <div class="cbarbg"><div class="cbarfill" style="width:${pct}%;background:${color}"></div></div>
+    </div>`;
+  }).join('');
+  html += '<div style="margin-top:14px"><canvas id="chartCuadrilla" height="100"></canvas></div>';
+  container.innerHTML = html;
+  // Rebuild cuadrilla chart
+  _rebuildQChart(qs, qVeredas);
+}
+
+function _rebuildQChart(qs, qVeredas){
+  const canvas = document.getElementById('chartCuadrilla');
+  if(!canvas) return;
+  if(window._chartQ){ try{window._chartQ.destroy();}catch(e){} }
+  const colors = qs.map(q=>q.color||QC[q.id]||'#2E7D32');
+  window._chartQ = new Chart(canvas.getContext('2d'),{
+    type:'doughnut',
+    data:{labels:qs.map(q=>'C'+q.id+' ('+getResumen(q.id).total+')'),datasets:[{data:qs.map(q=>getResumen(q.id).total),backgroundColor:colors,borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{font:{size:9},padding:8}}}}
+  });
+}
+
+// ── Render map filter tabs dynamically ───────────────────────────
+function _renderMapTabs(){
+  const tabsEl = document.querySelector('.tabs');
+  if(!tabsEl) return;
+  const proj = (typeof getActiveProject==='function') ? getActiveProject() : null;
+  const qs = proj ? (proj.cuadrillas||[]) : [{id:1},{id:2},{id:3},{id:4}];
+  let html = '<button class="tab active" onclick="filterMap(\'all\',this)">Todas</button>';
+  qs.forEach(q=>{ html+=`<button class="tab" onclick="filterMap('${q.id}',this)">C${q.id}</button>`; });
+  tabsEl.innerHTML = html;
+}
+
+// ── Render map legend dynamically ────────────────────────────────
+function _renderMapLegend(){
+  const leg = document.getElementById('mapLegend');
+  if(!leg) return;
+  const proj = (typeof getActiveProject==='function') ? getActiveProject() : null;
+  const qs = proj ? (proj.cuadrillas||[]) : [{id:1,name:'Sur Occ.',color:'#2E7D32'},{id:2,name:'Centro Occ.',color:'#1565C0'},{id:3,name:'Centro Nor.',color:'#E65100'},{id:4,name:'Nor. Oriente',color:'#6A1B9A'}];
+  const total = CASAS.length;
+  leg.innerHTML = qs.map(q=>{
+    const cnt = CASAS.filter(c=>c.cuadrilla===q.id).length;
+    return `<div class="li"><div class="ldot" style="background:${q.color||QC[q.id]||'#2E7D32'}"></div>C${q.id} ${q.name||('Cuadrilla '+q.id)} (${cnt})</div>`;
+  }).join('');
+}
+
+// ── Rebuild veredas chart with active project data ────────────────
+function _rebuildVeredasChart(){
+  const canvas = document.getElementById('chartVeredas');
+  if(!canvas) return;
+  if(window._chartV){ try{window._chartV.destroy();}catch(e){} }
+  // Build vereda data from CASAS
+  const vMap={};
+  CASAS.forEach(c=>{ vMap[c.vereda]=(vMap[c.vereda]||0)+1; });
+  const veredas=Object.keys(vMap).sort();
+  const proj=(typeof getActiveProject==='function')?getActiveProject():null;
+  const qs=proj?(proj.cuadrillas||[]):[];
+  // Color each vereda by its most common cuadrilla
+  const vColors=veredas.map(v=>{
+    const qCounts={};
+    CASAS.filter(c=>c.vereda===v).forEach(c=>{qCounts[c.cuadrilla]=(qCounts[c.cuadrilla]||0)+1;});
+    const topQ=Object.entries(qCounts).sort((a,b)=>b[1]-a[1])[0];
+    if(!topQ) return '#2E7D32';
+    const q=qs.find(x=>x.id===Number(topQ[0]));
+    return (q&&q.color)||QC[Number(topQ[0])]||'#2E7D32';
+  });
+  window._chartV = new Chart(canvas.getContext('2d'),{
+    type:'bar',
+    data:{labels:veredas,datasets:[{label:'Viviendas',data:veredas.map(v=>vMap[v]),backgroundColor:vColors,borderRadius:3}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>' '+ctx.raw+' viviendas'}}},scales:{x:{beginAtZero:true,ticks:{font:{size:8}},grid:{color:'rgba(0,0,0,.04)'}},y:{ticks:{font:{size:8},color:'#444'}}}}
+  });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1109,7 +1438,7 @@ let gmap,mLayers={};
 function initMap(){
   gmap=L.map('map').setView([8.35,-74.17],12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap',maxZoom:18}).addTo(gmap);
-  [1,2,3,4].forEach(q=>{mLayers[q]=L.layerGroup().addTo(gmap);});
+  _getActiveQIds().forEach(q=>{mLayers[q]=L.layerGroup().addTo(gmap);});
   CASAS.forEach(h=>{
     const col=QC[h.cuadrilla];
     const m=L.circleMarker([h.lat,h.lng],{radius:6,fillColor:col,color:'#fff',weight:1.5,opacity:1,fillOpacity:.85});
@@ -1117,25 +1446,81 @@ function initMap(){
     mLayers[h.cuadrilla].addLayer(m);
   });
 }
-function renderMap(){ if(!gmap||!CASAS.length)return; [1,2,3,4].forEach(q=>{if(mLayers[q])mLayers[q].clearLayers();}); CASAS.forEach(h=>{const col=QC[h.cuadrilla];const m=L.circleMarker([h.lat,h.lng],{radius:6,fillColor:col,color:'#fff',weight:1.5,opacity:1,fillOpacity:.85});m.bindPopup('<b>🏠 #'+h.id+'</b><br><span style="font-size:11px">'+h.nombre+'</span><br><small>'+h.vereda+' — C'+h.cuadrilla+'</small>');mLayers[h.cuadrilla].addLayer(m);}); }
+function renderMap(){ if(!gmap||!CASAS.length)return; Object.keys(mLayers).forEach(q=>{if(mLayers[q])mLayers[q].clearLayers();}); CASAS.forEach(h=>{const col=QC[h.cuadrilla];const m=L.circleMarker([h.lat,h.lng],{radius:6,fillColor:col,color:'#fff',weight:1.5,opacity:1,fillOpacity:.85});m.bindPopup('<b>🏠 #'+h.id+'</b><br><span style="font-size:11px">'+h.nombre+'</span><br><small>'+h.vereda+' — C'+h.cuadrilla+'</small>');mLayers[h.cuadrilla].addLayer(m);}); }
 function filterMap(w,btn){
   document.querySelectorAll('.tabs .tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');
-  [1,2,3,4].forEach(q=>{w==='all'||w===String(q)?gmap.addLayer(mLayers[q]):gmap.removeLayer(mLayers[q]);});
+  Object.keys(mLayers).forEach(q=>{w==='all'||w===String(q)?gmap.addLayer(mLayers[q]):gmap.removeLayer(mLayers[q]);});
 }
 
 // ══════════════════════════════════════════════════════════
 // GRÁFICOS
 // ══════════════════════════════════════════════════════════
 function initCharts(){
-  new Chart(document.getElementById('chartAvance').getContext('2d'),{type:'line',data:{labels:['Inicio','S1','S2','S3','S4','S5','S6','S7','S8','S9','S10','S11','S12'],datasets:[{label:'Planificado',data:[0,22,44,66,88,110,132,154,176,198,220,242,267],borderColor:'#90A4AE',borderDash:[5,5],borderWidth:2,pointRadius:3,fill:false,tension:.3},{label:'Real',data:[0,null,null,null,null,null,null,null,null,null,null,null,null],borderColor:'#4CAF50',backgroundColor:'rgba(76,175,80,.1)',borderWidth:2.5,pointRadius:4,fill:true,tension:.3}]},options:{responsive:true,plugins:{legend:{position:'top',labels:{font:{size:10},boxWidth:13}}},scales:{y:{beginAtZero:true,max:280,ticks:{stepSize:50,font:{size:9}}},x:{ticks:{font:{size:9}},grid:{display:false}}}}});
-  new Chart(document.getElementById('chartVeredas').getContext('2d'),{type:'bar',data:{labels:VEREDAS.map(v=>v.name),datasets:[{label:'Viviendas',data:VEREDAS.map(v=>v.t),backgroundColor:VEREDAS.map(v=>QC[v.q]),borderRadius:3}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>' '+ctx.raw+' viviendas'}}},scales:{x:{beginAtZero:true,ticks:{font:{size:8}},grid:{color:'rgba(0,0,0,.04)'}},y:{ticks:{font:{size:8},color:'#444'}}}}});
-  new Chart(document.getElementById('chartCuadrilla').getContext('2d'),{type:'doughnut',data:{labels:['C1','C2','C3','C4'],datasets:[{data:[67,68,67,65],backgroundColor:['#2E7D32','#1565C0','#E65100','#6A1B9A'],borderWidth:2,borderColor:'#fff'}]},options:{responsive:true,plugins:{legend:{position:'bottom',labels:{font:{size:9},boxWidth:9,padding:5}}}}});
+  // chartAvance — rebuilt dynamically by _rebuildAvanceChart()
+  // chartVeredas — rebuilt dynamically by _rebuildVeredasChart()
+  // chartCuadrilla — rebuilt dynamically by _renderQDistribution()
+  _rebuildAvanceChart();
+  // chartVeredas and chartCuadrilla built after CASAS are loaded (called from initAll)
+}
+
+// ── Avance Real vs Planificado — fully dynamic ─────────────────────────────
+function _rebuildAvanceChart(){
+  const canvas=document.getElementById('chartAvance');
+  if(!canvas) return;
+  if(window._chartA){ try{window._chartA.destroy();}catch(e){} }
+  const proj=(typeof getActiveProject==='function')?getActiveProject():null;
+  const total = (proj&&proj.total)||CASAS.length||267;
+  // Calculate weeks between installStart and endDate
+  let weeks=12;
+  if(proj&&proj.installStart&&proj.endDate){
+    const ms=new Date(proj.endDate+'T12:00')-new Date(proj.installStart+'T12:00');
+    weeks=Math.max(1,Math.round(ms/(7*24*3600*1000)));
+  }
+  // Planificado: linear from 0 to total over 'weeks' weeks
+  const planLabels=['Inicio',...Array.from({length:weeks},(_,i)=>'S'+(i+1))];
+  const planData=[0,...Array.from({length:weeks},(_,i)=>Math.round(total*(i+1)/weeks))];
+  // Real: count instaladas por semana using ctrlData dates
+  const startDate=proj&&proj.installStart?new Date(proj.installStart+'T00:00'):null;
+  const realData=[0,...Array(weeks).fill(null)];
+  if(startDate&&window.ctrlData&&window.ctrlData.length){
+    const installed=window.ctrlData.filter(r=>r.estado==='Instalado'||r.estado==='Energizado');
+    for(let w=1;w<=weeks;w++){
+      const weekEnd=new Date(startDate.getTime()+(w*7*24*3600*1000));
+      realData[w]=installed.filter(r=>r.fecha&&new Date(r.fecha+'T12:00')<=weekEnd).length||null;
+    }
+    // Current week: always show real count
+    const now=new Date();
+    const curWeek=startDate?Math.ceil((now-startDate)/(7*24*3600*1000)):1;
+    if(curWeek>=1&&curWeek<=weeks) realData[Math.min(curWeek,weeks)]=installed.length||0;
+  }
+  window._chartA=new Chart(canvas.getContext('2d'),{
+    type:'line',
+    data:{labels:planLabels,datasets:[
+      {label:'Planificado',data:planData,borderColor:'#90A4AE',borderDash:[5,5],borderWidth:2,pointRadius:3,fill:false,tension:.3},
+      {label:'Real',data:realData,borderColor:'#4CAF50',backgroundColor:'rgba(76,175,80,.1)',borderWidth:2.5,pointRadius:4,fill:true,tension:.3}
+    ]},
+    options:{responsive:true,plugins:{legend:{position:'top',labels:{font:{size:10},boxWidth:13}}},
+      scales:{y:{beginAtZero:true,max:Math.ceil(total*1.05/50)*50,ticks:{stepSize:Math.ceil(total/5/10)*10,font:{size:9}}},
+              x:{ticks:{font:{size:9},maxRotation:45},grid:{display:false}}}}
+  });
 }
 function initSemChips(){
   const w=document.getElementById('semChips');
-  [22,44,66,88,110,132,154,176,198,220,242,267].forEach((v,i)=>{
+  if(!w) return;
+  w.innerHTML='';
+  const proj=(typeof getActiveProject==='function')?getActiveProject():null;
+  const total=(proj&&proj.total)||CASAS.length||267;
+  let weeks=12;
+  if(proj&&proj.installStart&&proj.endDate){
+    const ms=new Date(proj.endDate+'T12:00')-new Date(proj.installStart+'T12:00');
+    weeks=Math.max(1,Math.round(ms/(7*24*3600*1000)));
+  }
+  const perWeek=total/weeks;
+  const color=_getActiveQIds().length>0?QC[_getActiveQIds()[0]]||'var(--c1)':'var(--c1)';
+  Array.from({length:weeks},(_,i)=>{
+    const v=Math.min(total,Math.round(perWeek*(i+1)));
     const s=document.createElement('span');
-    s.style.cssText='display:inline-block;background:var(--c1);color:#fff;font-size:9px;font-weight:600;padding:2px 8px;border-radius:20px;margin:2px;opacity:'+(0.35+(i/12)*0.65);
+    s.style.cssText='display:inline-block;background:'+color+';color:#fff;font-size:9px;font-weight:600;padding:2px 8px;border-radius:20px;margin:2px;opacity:'+(0.35+(i/weeks)*0.65);
     s.textContent='S'+(i+1)+': '+v;w.appendChild(s);
   });
 }
@@ -1153,8 +1538,12 @@ async function refreshFileCounts(items){
 
 function schedAS(){clearTimeout(autoST);autoST=setTimeout(()=>{lsS(KC,ctrlData);showToast('💾 Auto-guardado');},900);}
 function saveControl(){
-  clearTimeout(asTimer);
-  ctrlData.forEach(r=>{delete r._new;}); // commit rows — cuadrilla can no longer self-delete
+  clearTimeout(autoST);
+  const now=new Date().toISOString();
+  ctrlData.forEach(r=>{
+    delete r._new;
+    r.updatedAt=now; // ALWAYS stamp so sync can detect change
+  });
   lsS(window._KC||KC,ctrlData);
   renderCtrl();
   showToast('💾 Control guardado ('+ctrlData.length+' registros)');
@@ -1179,7 +1568,7 @@ async function renderCtrl(){
     const nomCell=v&&v.ok?v.nombre:(row.item&&CASAS.find(c=>c.id===Number(row.item))?.nombre||'');
     const verCell=v&&v.ok?v.vereda:(row.item&&CASAS.find(c=>c.id===Number(row.item))?.vereda||row.vereda||'');
     const canE=canEditQ(Number(row.cuadrilla));
-    const qOpts=isMaster()?[1,2,3,4]:[SESSION?.cuadrilla||1];
+    const qOpts=isMaster()?_getActiveQIds():[SESSION?.cuadrilla||1];
     const fc=fileCounts[row.item]||0;
     const tr=document.createElement('tr');
     if(hasErr)tr.classList.add('rerr');
@@ -1197,7 +1586,7 @@ async function renderCtrl(){
       '<td style="font-size:9px;min-width:90px">'+
       (row.gps_lat
         ?'<a href="https://maps.google.com/?q='+row.gps_lat+','+row.gps_lng+'" target="_blank" style="color:#1565C0;text-decoration:none;display:block;line-height:1.4" title="Ver en Google Maps">📍 '+row.gps_lat+'<br>'+row.gps_lng+(row.gps_acc?'<br><span style="color:var(--mt)">±'+row.gps_acc+'m</span>':'')+'</a>'
-        :(canE?'<button onclick="refreshRowGPS('+realIdx+')" style="font-size:9px;background:#E3F2FD;color:#1565C0;border:1px solid #90CAF9;border-radius:4px;padding:2px 6px;cursor:pointer">📍 Capturar GPS</button>':'<span style="color:var(--mt)">—</span>'))+'</td>'+
+        :(canE?'<button onclick="refreshRowGPS('+realIdx+')" title="Toca para guardar tu ubicación GPS actual en este registro. Debes estar en la vivienda del usuario." style="font-size:9px;background:#E3F2FD;color:#1565C0;border:1px solid #90CAF9;border-radius:4px;padding:3px 7px;cursor:pointer;line-height:1.4">📍 Capturar GPS<br><span style="font-size:8px;color:#5C9BC4;display:block">Tu ubicación actual</span></button>':'<span style="color:var(--mt)">—</span>'))+'</td>'+
       '<td><button class="bfile" onclick="openFilesModal('+row.item+',\''+nomCell.replace(/'/g,'')+'\')">'+(fc>0?'📷 '+fc+'/19':'📷 0/19')+'</button></td>'+
       '<td>'+(hasErr?'<div class="errmsg">'+v.msg+'</div>':'<span style="color:var(--acc);font-size:11px;font-weight:600">✅ OK</span>')+'</td>'+
       '<td style="white-space:nowrap">'+
@@ -1263,122 +1652,36 @@ window._sfvGpsCallback = function(g){
 };
 
 function openGpsPopup(){
-  const pw=440, ph=370;
-  const pl=Math.round((screen.width-pw)/2);
-  const pt=Math.round((screen.height-ph)/2);
-  const projName = (lsG('sfv_project_config_v1')||{}).name||'SFV Arenal';
-  const html=`<!DOCTYPE html><html lang="es"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GPS — ${projName.replace(/`/g,"'")}</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,sans-serif;background:#0d2318;color:#fff;display:flex;flex-direction:column;
-       align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center}
-  h2{color:#4CAF50;margin-bottom:14px;font-size:22px}
-  #status{font-size:14px;margin:12px 0;min-height:44px;line-height:1.6;color:#ccc}
-  #coords{font-family:monospace;font-size:15px;background:#1B3A2D;padding:14px 20px;
-          border-radius:10px;margin:10px 0;display:none;border:1px solid #2E7D32}
-  #coords b{color:#4CAF50}
-  .btn{background:#2E7D32;color:#fff;border:none;border-radius:8px;padding:11px 26px;
-       font-size:14px;cursor:pointer;margin:6px 4px;min-width:130px}
-  .btn:disabled{opacity:.4}
-  .btn.gray{background:#424242}
-  .btn.blue{background:#1565C0}
-  #manualBox{display:none;margin-top:12px;background:#112a1f;border-radius:8px;padding:12px;width:100%}
-  #manualBox input{background:#0d2318;color:#fff;border:1px solid #2E7D32;border-radius:6px;
-                   padding:8px 10px;width:calc(50% - 6px);font-size:13px;margin:3px}
-  #manualBox p{font-size:11px;color:#aaa;margin-top:6px}
-</style></head><body>
-<h2>📍 Capturar Ubicación GPS</h2>
-<div id="status">⏳ Solicitando permiso...<br><small>Acepta cuando Chrome lo pida</small></div>
-<div id="coords"><b>Lat:</b> <span id="latVal">—</span>°<br><b>Long:</b> <span id="lngVal">—</span>°<br>
-  <small id="accVal" style="color:#aaa">calculando precisión...</small></div>
-<button class="btn" id="retryBtn" onclick="tryGPS()" disabled>🔄 Reintentar GPS</button>
-<button class="btn gray" onclick="window.close()">✕ Cerrar</button>
-<button class="btn blue" style="font-size:12px;min-width:auto;padding:8px 14px" onclick="document.getElementById('manualBox').style.display='block'">✏️ Ingresar manual</button>
-<div id="manualBox">
-  <p style="margin-bottom:8px;color:#eee">Ingresa coordenadas manualmente:</p>
-  <input id="mLat" type="number" step="any" placeholder="Latitud ej: 8.519327">
-  <input id="mLng" type="number" step="any" placeholder="Longitud ej: -74.190307">
-  <br><button class="btn blue" style="margin-top:8px" onclick="applyManual()">✅ Aplicar</button>
-  <p>Abre Google Maps → mantén presionado en tu posición → copia las coordenadas</p>
-</div>
-<script>
-function sendBack(data){
-  // Método 1: llamar función directamente en la ventana opener (más confiable)
-  if(window.opener && !window.opener.closed){
-    try{
-      if(typeof window.opener._sfvGpsCallback==='function'){
-        window.opener._sfvGpsCallback(data);
-        document.getElementById('status').innerHTML='✅ Coordenadas enviadas al dashboard. Cerrando...';
-        setTimeout(()=>window.close(),1500);
-        return;
-      }
-    }catch(e){ console.warn('opener direct call failed:',e); }
-    // Método 2: postMessage
-    try{ window.opener.postMessage({type:'SFV_GPS',data:data},'*'); }catch(e2){}
-  }
-  // Método 3: localStorage (fallback)
-  try{ localStorage.setItem('sfv_gps_popup_v1',JSON.stringify(data)); }catch(e){}
-  document.getElementById('status').innerHTML='✅ GPS capturado. Puedes cerrar esta ventana.';
-  document.getElementById('coords').style.display='block';
-  setTimeout(()=>window.close(),2000);
-}
-function tryGPS(){
-  document.getElementById('retryBtn').disabled=true;
-  document.getElementById('status').innerHTML='⏳ Obteniendo ubicación GPS...';
-  document.getElementById('coords').style.display='none';
-  if(!navigator.geolocation){
-    document.getElementById('status').innerHTML='❌ Este navegador no soporta GPS';
-    document.getElementById('retryBtn').disabled=false; return;
-  }
-  navigator.geolocation.getCurrentPosition(pos=>{
-    const lat=parseFloat(pos.coords.latitude.toFixed(7));
-    const lng=parseFloat(pos.coords.longitude.toFixed(7));
-    const acc=Math.round(pos.coords.accuracy);
-    document.getElementById('latVal').textContent=lat;
-    document.getElementById('lngVal').textContent=lng;
-    document.getElementById('accVal').textContent='±'+acc+'m de precisión';
-    document.getElementById('coords').style.display='block';
-    document.getElementById('retryBtn').disabled=false;
-    sendBack({lat,lng,acc,ts:new Date().toISOString()});
-  },err=>{
-    const msgs={1:'Permiso denegado — activa la ubicación en Chrome.',2:'Señal GPS no disponible.',3:'Tiempo agotado — reintenta o usa manual.'};
-    document.getElementById('status').innerHTML='⚠️ '+(msgs[err.code]||err.message);
-    document.getElementById('retryBtn').disabled=false;
-  },{enableHighAccuracy:true,timeout:15000,maximumAge:0});
-  setTimeout(()=>{
-    if(document.getElementById('retryBtn').disabled){
-      document.getElementById('status').innerHTML='⏳ Esperando señal GPS... (puede tardar 15s)';
-    }
-  },5000);
-}
-function applyManual(){
-  const lat=parseFloat(document.getElementById('mLat').value);
-  const lng=parseFloat(document.getElementById('mLng').value);
-  if(isNaN(lat)||isNaN(lng)){alert('Ingresa coordenadas válidas');return;}
-  sendBack({lat,lng,acc:999,ts:new Date().toISOString()});
-}
-window.onload=tryGPS;
-<\/script></body></html>`;
-  const blob=new Blob([html],{type:'text/html'});
-  const burl=URL.createObjectURL(blob);
-  const popup=window.open(burl,'sfv_gps_popup','width='+pw+',height='+ph+',left='+pl+',top='+pt+',resizable=yes,scrollbars=yes');
-  if(!popup){
-    showToast('⚠️ Chrome bloqueó el popup — ve a Ajustes de Chrome → Permisos del sitio → Ventanas emergentes → Permitir para este sitio');
+  // ── En APK (Capacitor): usar GPS directo del WebView ──
+  if(typeof window.Capacitor !== 'undefined'){
+    showToast('📍 Solicitando GPS en el APK...');
+    modalCaptureGPS();
     return;
   }
-  // Fallback: también escuchar postMessage en caso de que la llamada directa falle
+  const pw=440, ph=420;
+  const pl=Math.round((screen.width-pw)/2);
+  const pt=Math.round((screen.height-ph)/2);
+
+  // ── URL del popup: MISMA PÁGINA con ?sfvgps=1 ──
+  // Garantiza mismo origen → window.opener._sfvGpsCallback() funciona
+  const baseUrl = window.location.href.split('?')[0].split('#')[0];
+  const popupUrl = baseUrl + '?sfvgps=1';
+
+  const popup=window.open(popupUrl,'sfv_gps_popup','width='+pw+',height='+ph+',left='+pl+',top='+pt+',resizable=yes,scrollbars=yes');
+  if(!popup){
+    showToast('⚠️ Chrome bloqueó el popup — ve a Ajustes Chrome → Permisos del sitio → Ventanas emergentes → Permitir');
+    return;
+  }
+  // Fallback 1: postMessage (si opener es distinto origen)
   const listener=(evt)=>{
     if(evt.data&&evt.data.type==='SFV_GPS'){
       window._sfvGpsCallback(evt.data.data);
       window.removeEventListener('message',listener);
       clearInterval(poll);
-      URL.revokeObjectURL(burl);
     }
   };
   window.addEventListener('message',listener);
-  // Fallback localStorage polling
+  // Fallback 2: localStorage polling (mismo origen garantizado)
   let polls=0;
   const poll=setInterval(()=>{
     polls++;
@@ -1387,10 +1690,10 @@ window.onload=tryGPS;
       if(raw){
         const g=JSON.parse(raw); localStorage.removeItem('sfv_gps_popup_v1');
         clearInterval(poll); window.removeEventListener('message',listener);
-        window._sfvGpsCallback(g); URL.revokeObjectURL(burl);
+        window._sfvGpsCallback(g);
       }
     }catch(e){}
-    if(polls>80){clearInterval(poll);URL.revokeObjectURL(burl);window.removeEventListener('message',listener);}
+    if(polls>80){ clearInterval(poll); window.removeEventListener('message',listener); }
   },1500);
 }
 
@@ -1555,7 +1858,7 @@ async function addGeotagToImage(dataUrl, gpsData){
 async function addRow(){
   if(isViewer()){showToast('⛔ Modo solo lectura');return;}
   const q=SESSION?.role==='cuadrilla'?SESSION.cuadrilla:1;
-  const row={fecha:new Date().toISOString().slice(0,10),cuadrilla:q,item:'',vereda:'',estado:'Pendiente',obs:''};
+  const row={id:'r_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),fecha:new Date().toISOString().slice(0,10),cuadrilla:q,item:'',vereda:'',estado:'Pendiente',obs:''};
   if(SESSION?.role==='cuadrilla')row._new=true;
   ctrlData.push(row);
   renderCtrl();schedAS();
@@ -1598,17 +1901,67 @@ function refreshRowGPS(i){
     showToast('📍 Coordenadas manuales guardadas');
     return;
   }
-  showToast('📍 Solicitando GPS...');
-  captureGPS().then(gps=>{
-    if(!gps){
-      showToast('⚠️ GPS no respondió — verifica permisos en Ajustes → Chrome → Ubicación');
-      return;
+  // Find button by data attribute or onclick
+  const _gBtnEl=[...document.querySelectorAll('button')].find(b=>(b.getAttribute('onclick')||'').includes('refreshRowGPS('+i+')'));
+  const _setBtnState=(state,html)=>{if(_gBtnEl){_gBtnEl.disabled=state==='loading';_gBtnEl.innerHTML=html;}};
+  
+  // Try GPS API first
+  if(!navigator.geolocation){
+    showToast('⚠️ Tu navegador no soporta GPS. Usa Chrome en Android/PC');
+    _setBtnState('error','📍 Sin GPS<br><small style="color:#C62828">Usa Chrome</small>');
+    return;
+  }
+  _setBtnState('loading','⏳ Buscando...<br><small style="color:#5C9BC4">Espera...</small>');
+  showToast('📍 Solicitando ubicación GPS...');
+  
+  // Use a more reliable approach with explicit timeout
+  let gpsDone=false;
+  const gpsTimeout=setTimeout(()=>{
+    if(!gpsDone){
+      gpsDone=true;
+      _setBtnState('ready','📍 Capturar GPS<br><span style="font-size:8px;color:#5C9BC4;display:block">Tu ubicación actual</span>');
+      // Fallback: ask for manual entry
+      const ok=confirm('⏱ GPS tardó demasiado en PC.\n\n¿Ingresar coordenadas manualmente?\n(Busca tu ubicación en Google Maps, haz clic derecho → "¿Qué hay aquí?")');
+      if(ok){
+        const latStr=prompt('Latitud (ej: 8.3306):','');if(!latStr)return;
+        const lngStr=prompt('Longitud (ej: -74.1683):','');if(!lngStr)return;
+        const lat=parseFloat(latStr),lng=parseFloat(lngStr);
+        if(isNaN(lat)||isNaN(lng)){showToast('⚠️ Coordenadas inválidas');return;}
+        ctrlData[i].gps_lat=lat;ctrlData[i].gps_lng=lng;ctrlData[i].gps_acc=999;ctrlData[i].gps_ts=new Date().toISOString();
+        renderCtrl();schedAS();showToast('📍 Coordenadas guardadas manualmente');
+      }
     }
-    ctrlData[i].gps_lat=gps.lat; ctrlData[i].gps_lng=gps.lng;
-    ctrlData[i].gps_acc=gps.acc; ctrlData[i].gps_ts=gps.ts;
-    renderCtrl(); schedAS();
-    showToast('📍 GPS: '+gps.lat+', '+gps.lng+' ±'+gps.acc+'m');
-  });
+  }, 15000);
+  
+  navigator.geolocation.getCurrentPosition(
+    pos=>{
+      clearTimeout(gpsTimeout);if(gpsDone)return;gpsDone=true;
+      const gps={lat:parseFloat(pos.coords.latitude.toFixed(7)),lng:parseFloat(pos.coords.longitude.toFixed(7)),acc:Math.round(pos.coords.accuracy),ts:new Date().toISOString()};
+      ctrlData[i].gps_lat=gps.lat;ctrlData[i].gps_lng=gps.lng;ctrlData[i].gps_acc=gps.acc;ctrlData[i].gps_ts=gps.ts;
+      _lastGPS=gps;_setBtnState('ready','📍 GPS OK<br><small style="color:#2E7D32">✓ '+gps.lat.toFixed(4)+'</small>');
+      renderCtrl();schedAS();
+      showToast('📍 GPS: '+gps.lat.toFixed(5)+', '+gps.lng.toFixed(5)+' ±'+gps.acc+'m ✓');
+    },
+    err=>{
+      clearTimeout(gpsTimeout);if(gpsDone)return;gpsDone=true;
+      _setBtnState('ready','📍 Capturar GPS<br><span style="font-size:8px;color:#5C9BC4;display:block">Tu ubicación actual</span>');
+      if(err.code===1){
+        showToast('⚠️ GPS bloqueado — Permite ubicación en Chrome: 🔒 junto a la URL → Ubicación → Permitir');
+      } else {
+        // TIMEOUT or UNAVAILABLE: offer manual entry
+        const ok=confirm('GPS no disponible en este dispositivo/red.\n\n¿Ingresar coordenadas manualmente?');
+        if(ok){
+          const latStr=prompt('Latitud (ej: 8.3306):','');if(!latStr)return;
+          const lngStr=prompt('Longitud (ej: -74.1683):','');if(!lngStr)return;
+          const lat=parseFloat(latStr),lng=parseFloat(lngStr);
+          if(isNaN(lat)||isNaN(lng)){showToast('⚠️ Coordenadas inválidas');return;}
+          ctrlData[i].gps_lat=lat;ctrlData[i].gps_lng=lng;ctrlData[i].gps_acc=999;ctrlData[i].gps_ts=new Date().toISOString();
+          renderCtrl();schedAS();showToast('📍 Coordenadas guardadas manualmente');
+        }
+      }
+    },
+    {enableHighAccuracy:true, timeout:14000, maximumAge:30000}
+  );
 }
 
 function cuadrillaDelRow(i){
@@ -1662,7 +2015,10 @@ function executeMasterConfirm(){
   if(pwd!==pwds.master){err.style.display='block';err.textContent='❌ Contraseña incorrecta';document.getElementById('mconfPwd').focus();return;}
   err.style.display='none';
   document.getElementById('masterConfirmOverlay').classList.remove('open');
-  if(_masterConfirmCallback)_masterConfirmCallback();
+  if(_masterConfirmCallback){
+    try{ _masterConfirmCallback(); }
+    catch(e){ console.error('[masterConfirm] Error en callback:',e); showToast('⚠️ Error al ejecutar acción: '+e.message); }
+  }
   _masterConfirmCallback=null;
 }
 function exportCtrlCSV(){
@@ -1793,7 +2149,7 @@ function _updateModalGpsBar(state, gps){
     dot.textContent='📋';
     bar.style.background='#E3F2FD'; bar.style.color='#0D47A1';
     bar.style.borderBottomColor='#90CAF9';
-    txt.textContent='GPS automático no disponible (archivo local). Ingresa coordenadas:';
+    txt.textContent='GPS automático no disponible en iframe Wix. Usa 🌐 GPS en popup o ingresa coordenadas:';
     if(manDiv) manDiv.style.display='block';
     if(_lastGPS){
       const la=document.getElementById('fmManLat');
@@ -2242,37 +2598,53 @@ let curCasa=null,mMap=null;
 function getDirData(){
   let data=CASAS.map(c=>{
     const effQ=casaEd[c.id]?.cuadrilla||c.cuadrilla;
-    return{...c,cuadrilla:effQ,nombre:casaEd[c.id]?.nombre||c.nombre,vereda:casaEd[c.id]?.vereda||c.vereda,lat:casaEd[c.id]?.lat??c.lat,lng:casaEd[c.id]?.lng??c.lng,estado:getEst(c.id)};
+    return{...c,cuadrilla:effQ,cedula:casaEd[c.id]?.cedula||c.cedula||'',nombre:casaEd[c.id]?.nombre||c.nombre,vereda:casaEd[c.id]?.vereda||c.vereda,lat:casaEd[c.id]?.lat??c.lat,lng:casaEd[c.id]?.lng??c.lng,estado:getEst(c.id)};
   });
   if(dirF!=='all')data=data.filter(c=>String(c.cuadrilla)===dirF);
   if(estF!=='all')data=data.filter(c=>c.estado===estF);
   const q=(document.getElementById('dirSearch')?.value||'').toLowerCase();
-  if(q)data=data.filter(c=>String(c.id).includes(q)||c.nombre.toLowerCase().includes(q)||c.vereda.toLowerCase().includes(q)||c.estado.toLowerCase().includes(q));
+  if(q)data=data.filter(c=>String(c.id).includes(q)||c.nombre.toLowerCase().includes(q)||c.vereda.toLowerCase().includes(q)||c.estado.toLowerCase().includes(q)||(c.cedula&&String(c.cedula).includes(q)));
   data.sort((a,b)=>{let av=a[dirSort.col],bv=b[dirSort.col];if(typeof av==='string'){av=av.toLowerCase();bv=bv.toLowerCase();}return av<bv?-dirSort.dir:av>bv?dirSort.dir:0;});
   return data;
 }
-function sortDir(col){if(dirSort.col===col)dirSort.dir*=-1;else{dirSort.col=col;dirSort.dir=1;}['id','nombre','cuadrilla','vereda','estado'].forEach(c=>{const el=document.getElementById('sa-'+c);if(el)el.textContent=c===dirSort.col?(dirSort.dir===1?'↑':'↓'):'↕';});renderDir();}
+// ── Dynamic directorio cuadrilla filter tabs ─────────────────────
+function _renderDirQTabs(){
+  const el=document.getElementById('dirQTabs');
+  if(!el) return;
+  const qs=_getActiveQIds();
+  const BTN="padding:10px 13px;border:none;background:none;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;cursor:pointer;border-bottom:3px solid transparent;color:var(--mt);margin-bottom:-2px";
+  el.innerHTML=qs.map(q=>{
+    const col=QC[q]||'#2E7D32';
+    return '<button class="cq-tab" data-f="'+q+'" onclick="setCQTab(\''+q+'\',this)" style="'+BTN+'"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:'+col+';margin-right:4px"></span>C'+q+' <span id="cq'+q+'-cnt"></span></button>';
+  }).join('');
+}
 
-function renderDir(){
+function sortDir(col){if(dirSort.col===col)dirSort.dir*=-1;else{dirSort.col=col;dirSort.dir=1;}['id','cedula','nombre','cuadrilla','vereda','estado'].forEach(c=>{const el=document.getElementById('sa-'+c);if(el)el.textContent=c===dirSort.col?(dirSort.dir===1?'↑':'↓'):'↕';});renderDir();}
+
+async function renderDir(){
   const data=getDirData();const tot=data.length;
+  // Refresh file counts for all visible items so directorio shows accurate counts
+  const visibleIds=data.map(c=>c.id).filter(Boolean);
+  if(visibleIds.length) await refreshFileCounts(visibleIds);
   const pgs=Math.max(1,Math.ceil(tot/DPS));if(dirPg>pgs)dirPg=1;
   const slice=data.slice((dirPg-1)*DPS,dirPg*DPS);
   document.getElementById('dir-count-badge').textContent=tot+' viviendas';
   const cC={1:'var(--c1)',2:'var(--c2)',3:'var(--c3)',4:'var(--c4)'};
-  const byC=dirF==='all'?[1,2,3,4].map(q=>({q,n:data.filter(x=>x.cuadrilla===q).length})):[];
+  const byC=dirF==='all'?_getActiveQIds().map(q=>({q,n:data.filter(x=>x.cuadrilla===q).length})):[];
   const byE=['Pendiente','Instalando','Instalado','Energizado'].map(e=>({e,n:data.filter(x=>x.estado===e).length}));
   document.getElementById('dirStats').innerHTML=
     byC.map(x=>'<div style="display:flex;align-items:center;gap:2px"><strong style="color:'+cC[x.q]+'">'+x.n+'</strong> C'+x.q+'</div>').join('')+
     '<div style="flex:1"></div>'+byE.map(x=>'<div style="display:flex;align-items:center;gap:2px"><strong style="color:'+ET[x.e]+'">'+x.n+'</strong> '+x.e+'</div>').join('')+
     '<div style="margin-left:7px;padding-left:7px;border-left:1px solid var(--brd)"><strong>'+tot+'</strong> mostradas</div>';
   const tbody=document.getElementById('dirBody');tbody.innerHTML='';
-  if(!slice.length){tbody.innerHTML='<tr><td colspan="10" style="text-align:center;padding:26px;color:var(--mt)">Sin resultados.</td></tr>';} 
+  if(!slice.length){tbody.innerHTML='<tr><td colspan="11" style="text-align:center;padding:26px;color:var(--mt)">Sin resultados.</td></tr>';} 
   else slice.forEach(casa=>{
     const col=QC[casa.cuadrilla];const est=casa.estado;
     const lat=Number(casa.lat).toFixed(6),lng=Number(casa.lng).toFixed(6);
     const fc=fileCounts[casa.id]||0;
     const tr=document.createElement('tr');
     tr.innerHTML='<td><span style="font-family:\'Syne\',sans-serif;font-weight:800;font-size:12px">'+casa.id+'</span></td>'+
+      '<td style="font-size:10px;font-family:monospace;color:var(--mt)">'+((casa.cedula||'—'))+'</td>'+
       '<td style="max-width:170px"><div style="font-weight:600;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+casa.nombre+'">'+casa.nombre+'</div></td>'+
       '<td><span class="cbadge" style="background:'+col+'">C'+casa.cuadrilla+'</span></td>'+
       '<td style="font-size:10px">'+casa.vereda+'</td>'+
@@ -2318,8 +2690,8 @@ function setCQTab(f,btn){
 }
 function setEF(f,btn){estF=f;dirPg=1;document.querySelectorAll('.eqb').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderDir();}
 function exportDirCSV(){
-  const h='Item,Nombre,Cuadrilla,Zona,Vereda,Lat,Lng,Estado\n';
-  const rows=getDirData().map(c=>c.id+',"'+c.nombre+'",C'+c.cuadrilla+','+QN[c.cuadrilla]+','+c.vereda+','+Number(c.lat).toFixed(6)+','+Number(c.lng).toFixed(6)+','+c.estado).join('\n');
+  const h='Item,Cedula,Nombre,Cuadrilla,Zona,Vereda,Lat,Lng,Estado\n';
+  const rows=getDirData().map(c=>c.id+','+(c.cedula||'')+',"'+c.nombre+'",C'+c.cuadrilla+','+QN[c.cuadrilla]+','+c.vereda+','+Number(c.lat).toFixed(6)+','+Number(c.lng).toFixed(6)+','+c.estado).join('\n');
   sfvDownload('directorio_sfv.csv', new Blob(['\uFEFF'+h+rows],{type:'text/csv;charset=utf-8;'}));showToast('⬇ CSV exportado');
 }
 
@@ -2332,6 +2704,7 @@ function openCasaModal(id){
   const q=casaEd[id]?.cuadrilla||casa.cuadrilla;
   const col=QC[q];
   const nombre=casaEd[id]?.nombre||casa.nombre;
+  const cedula=casaEd[id]?.cedula||casa.cedula||'';
   const vereda=casaEd[id]?.vereda||casa.vereda;
   const lat=casaEd[id]?.lat??casa.lat;
   const lng=casaEd[id]?.lng??casa.lng;
@@ -2340,6 +2713,7 @@ function openCasaModal(id){
   // Master banner
   const mb=document.getElementById('mMasterBanner');if(mb)mb.style.display=isMaster()?'block':'none';
   // Nombre
+  if(document.getElementById('eCedula')){ document.getElementById('eCedula').value=cedula; document.getElementById('eCedula').disabled=!isMaster(); }
   document.getElementById('eNombre').value=nombre;
   document.getElementById('eNombre').disabled=!isMaster();
   // Cuadrilla select
@@ -2359,6 +2733,7 @@ function openCasaModal(id){
   // Info panel
   document.getElementById('mInfo').innerHTML=
     '<div class="ii"><label>Item</label><span style="font-family:\'Syne\',sans-serif;font-weight:800">'+id+' / 267</span></div>'+
+    '<div class="ii"><label>Cédula / Doc.</label><span style="font-family:monospace">'+((cedula||'— no registrada'))+'</span></div>'+
     '<div class="ii"><label>Cuadrilla actual</label><span style="color:'+col+';font-weight:700">C'+q+' — '+QN[q]+'</span></div>'+
     '<div class="ii full"><label>Nombre</label><span style="font-weight:600">'+nombre+'</span></div>'+
     '<div class="ii"><label>Vereda</label><span>'+vereda+'</span></div>'+
@@ -2385,11 +2760,13 @@ function closeCasaModal(){document.getElementById('casaModal').classList.remove(
 function saveCasaEdits(){
   if(!isMaster()||!curCasa)return;
   const id=curCasa.id;if(!casaEd[id])casaEd[id]={};
+  const ced=document.getElementById('eCedula')?.value.trim();
   const n=document.getElementById('eNombre').value.trim();
   const lat=parseFloat(document.getElementById('eLat').value);
   const lng=parseFloat(document.getElementById('eLng').value);
   const newQ=parseInt(document.getElementById('eCuadrilla').value);
   const newV=document.getElementById('eVereda').value;
+  if(ced) casaEd[id].cedula=ced;
   if(n)casaEd[id].nombre=n;
   if(!isNaN(lat))casaEd[id].lat=lat;
   if(!isNaN(lng))casaEd[id].lng=lng;
@@ -2445,20 +2822,19 @@ function openChangeMyCuadrillaPwd(){
 }
 function saveMyNewPwd(){
   if(SESSION?.role!=='cuadrilla')return;
-  const pwds=getPwds();
+  const pid=SESSION.projectId||getActiveProjectId();
+  const currentPwd=getQPwd(SESSION.cuadrilla, pid);
   const cur=document.getElementById('mpCurrent').value;
   const nw=document.getElementById('mpNew').value.trim();
   const cf=document.getElementById('mpConfirm').value.trim();
   const errEl=document.getElementById('mpErr');
   errEl.textContent='';
   // Validate current password
-  if(cur!==pwds['c'+SESSION.cuadrilla]){errEl.textContent='❌ Contraseña actual incorrecta';return;}
+  if(cur!==currentPwd){errEl.textContent='❌ Contraseña actual incorrecta';return;}
   if(nw.length<6){errEl.textContent='❌ La nueva contraseña debe tener al menos 6 caracteres';return;}
   if(nw!==cf){errEl.textContent='❌ Las contraseñas nuevas no coinciden';return;}
-  // Save
-  pwds['c'+SESSION.cuadrilla]=nw;
-  savePwdStore(pwds);
-  // Update current session context so they don't get locked out immediately
+  // Save using unified setter
+  setQPwd(SESSION.cuadrilla, nw, pid);
   document.getElementById('myPwdModal').classList.remove('open');
   showToast('🔐 Contraseña de C'+SESSION.cuadrilla+' actualizada correctamente. El master puede verla en su panel.');
   notifyPasswordChange(SESSION.cuadrilla);
@@ -2480,12 +2856,35 @@ function renderPwdPanel(){
   html+='<div style="font-size:11px;font-weight:800;color:var(--txt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">🔑 Contraseña Maestra (Byron Vizcaíno)</div>';
   html+='<div class="ppfield"><label><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#F57F17"></span> Contraseña maestra</label>';
   html+='<div class="ppr"><input type="password" id="ppMaster" value="'+pwds.master+'"><button onclick="togglePwd(\'ppMaster\',this)">👁</button></div></div>';
+  // Show per-project passwords
+  if(typeof getAllProjects==='function'){
+    const allProjs=getAllProjects().filter(p=>p.passwords&&Object.keys(p.passwords).length>0);
+    if(allProjs.length>0){
+      html+='<div style="margin-top:14px;padding:10px;background:#E3F2FD;border-radius:8px;border:1px solid #90CAF9"><div style="font-weight:700;font-size:11px;margin-bottom:8px;color:#1565C0">🔑 CONTRASEÑAS POR PROYECTO</div>';
+      allProjs.forEach(proj=>{
+        html+='<div style="margin-bottom:8px;padding:8px;background:#fff;border-radius:6px;border:1px solid #BBDEFB"><div style="font-weight:700;font-size:11px;color:#1565C0;margin-bottom:4px">📂 '+proj.name+'</div>';
+        (proj.cuadrillas||[]).forEach(q=>{
+          const qpwd=proj.passwords['c'+q.id]||'(sin asignar)';
+          html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px"><span style="font-size:10px">C'+q.id+' — '+q.name+':</span><div class="ppr" style="margin:0;flex:1;margin-left:8px;max-width:220px"><input type="password" id="ppProj_'+proj.id+'_c'+q.id+'" value="'+qpwd+'"><button onclick="togglePwd(\'ppProj_'+proj.id+'_c'+q.id+'\',this)">👁</button></div></div>';
+        });
+        html+='</div>';
+      });
+      html+='</div>';
+    }
+  }
   html+='<hr style="border:none;border-top:1px solid var(--brd);margin:14px 0">';
-  // Cuadrillas
-  html+='<div style="font-size:11px;font-weight:800;color:var(--txt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">🔒 Contraseñas de Cuadrillas</div>';
-  [1,2,3,4].forEach(q=>{
-    html+='<div class="ppfield"><label><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+QC[q]+'"></span> C'+q+' — '+QN[q]+'</label>';
-    html+='<div class="ppr"><input type="password" id="ppC'+q+'" value="'+pwds['c'+q]+'"><button onclick="togglePwd(\'ppC'+q+'\',this)">👁</button></div></div>';
+  // Cuadrillas del proyecto activo
+  html+='<div style="font-size:11px;font-weight:800;color:var(--txt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">🔒 Contraseñas de Cuadrillas</div>';
+  const _activeProjPwds=(typeof getActiveProject==='function')?getActiveProject()?.passwords||{}:{};
+  const _isArenal=(typeof getActiveProjectId==='function')?getActiveProjectId()==='arenal_2026':true;
+  if(!_isArenal){
+    html+='<div style="background:#FFF3E0;border:1px solid #FFB74D;border-radius:6px;padding:8px;font-size:10px;color:#E65100;margin-bottom:8px">⚠️ Estas contraseñas son del proyecto activo. Cada proyecto tiene sus propias contraseñas independientes.</div>';
+  }
+  _getActiveQIds().forEach(q=>{
+    const projPwd=_activeProjPwds['c'+q]||(pwds['c'+q]||'');
+    const inputId=_isArenal?('ppC'+q):('ppProj_active_c'+q);
+    html+='<div class="ppfield"><label><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+(QC[q]||'#2E7D32')+'"></span> C'+q+' — '+(QN[q]||'Cuadrilla '+q)+'</label>';
+    html+='<div class="ppr"><input type="password" id="'+inputId+'" value="'+projPwd+'"><button onclick="togglePwd(\''+inputId+'\',this)">👁</button></div></div>';
   });
   html+='<hr style="border:none;border-top:1px solid var(--brd);margin:14px 0">';
   // Visitantes autorizados
@@ -2551,8 +2950,42 @@ function savePwds(){
   const pwds=getPwds();
   const nm=document.getElementById('ppMaster')?.value.trim();
   if(nm&&nm!==pwds.master)pwds.master=nm;
-  [1,2,3,4].forEach(q=>{const v=document.getElementById('ppC'+q)?.value.trim();if(v)pwds['c'+q]=v;});
-  // Visitors from DOM
+
+  // ── Save cuadrilla passwords using unified setter ────────────
+  [1,2,3,4,5,6,7,8].forEach(q=>{
+    // Arenal/global passwords (ppC1, ppC2, etc.)
+    const vG=document.getElementById('ppC'+q)?.value.trim();
+    if(vG) setQPwd(q, vG, 'arenal_2026');
+
+    // Active non-Arenal project passwords (ppProj_active_c1, etc.)
+    const vA=document.getElementById('ppProj_active_c'+q)?.value.trim();
+    if(vA&&typeof getActiveProjectId==='function'){
+      const pid=getActiveProjectId();
+      if(pid&&pid!=='arenal_2026') setQPwd(q, vA, pid);
+    }
+  });
+
+  // ── Save per-project passwords (ppProj_{projId}_c{q.id} inputs) ──
+  if(typeof getAllProjects==='function'){
+    const allProjs=getAllProjects().filter(p=>!p.isBuiltIn&&p.passwords);
+    if(allProjs.length){
+      let changed=false;
+      allProjs.forEach(proj=>{
+        (proj.cuadrillas||[]).forEach(q=>{
+          const inp=document.getElementById('ppProj_'+proj.id+'_c'+q.id);
+          if(inp){
+            const nv=inp.value.trim();
+            if(nv&&nv!=='(sin asignar)'&&nv!==proj.passwords['c'+q.id]){
+              setQPwd(q.id, nv, proj.id);
+              changed=true;
+            }
+          }
+        });
+      });
+    }
+  }
+
+  // ── Visitors from DOM ────────────
   const newVisitors=[];
   document.querySelectorAll('[id^="vrow-"]').forEach(row=>{
     const vid=row.id.replace('vrow-','');
@@ -2585,8 +3018,8 @@ function savePwds(){
 // ══════════════════════════════════════════════════════════
 function renderReportesGrid(){
   const g=document.getElementById('reportesGrid');if(!g)return;g.innerHTML='';
-  [1,2,3,4].forEach(q=>{
-    const r=getResumen(q);const info=QI[q];const col=QC[q];
+  _getActiveQIds().forEach(q=>{
+    const r=getResumen(q);const info=QI[q]||{n:'C'+q,z:'',v:'',t:0};const col=QC[q]||'#2E7D32';
     const d=document.createElement('div');d.style.cssText='border:1.5px solid '+col+';border-radius:12px;overflow:hidden';
     d.innerHTML=
       '<div style="background:'+col+';padding:11px 13px;color:#fff">'+
@@ -2907,7 +3340,7 @@ function dlAvance(q,fmt){
   const fecha=new Date().toLocaleDateString('es-CO',{year:'numeric',month:'long',day:'numeric'});
   if(q==='all'){
     const hdrs=['Cuadrilla','Zona','Veredas','Total','Instaladas','Energizadas','Instalando','Pendientes','% Avance'];
-    const rows=[1,2,3,4].map(n=>{const r=getResumen(n);const i=QI[n];return[i.n,i.z,i.v,r.total,r.instaladas,r.energizadas,r.instalando,r.pendientes,r.pct+'%'];});
+    const rows=_getActiveQIds().map(n=>{const r=getResumen(n);const i=QI[n]||{n:'C'+n,z:'',v:''};return[i.n,i.z,i.v,r.total,r.instaladas,r.energizadas,r.instalando,r.pendientes,r.pct+'%'];});
     const tot=getResumen('all');rows.push(['TOTAL PROYECTO','—','—',tot.total,tot.instaladas,tot.energizadas,tot.instalando,tot.pendientes,tot.pct+'%']);
     if(fmt==='pdf'){
       if(!window.jspdf){showToast('⚠️ Librería no lista');return;}
@@ -3075,6 +3508,8 @@ async function initAll(){
   renderDir();
   updateKPIs();
   renderReportesGrid();
+  // Rebuild dynamic charts after project data is loaded
+  setTimeout(()=>{ _rebuildVeredasChart(); _renderQDistribution(); _renderMapTabs(); _renderMapLegend(); }, 300);
   updateNotifBadge();
   // Show notifications alert AFTER app renders (for cuadrilla/visitor users)
   setTimeout(()=>{
@@ -3458,99 +3893,394 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
   <button class="sync-btn" onclick="sfvSyncNow()">🔄 Sincronizar</button>
 </div>
 
-<!-- Service Worker: solo registrar si la app está hosteada (no en preview) -->
+<!-- Firebase: inicialización real + sync Firestore -->
 <script>
-(function(){
+// ══════════════════════════════════════════════════════════════════
+// SISTEMA DE SINCRONIZACIÓN — Firestore REST API (sin SDK)
+// Polling cada 8s + escritura inmediata al guardar
+// Sin bloqueos de pestañas · Funciona en incógnito · 0 dependencias
+// ══════════════════════════════════════════════════════════════════
+(()=>{
   'use strict';
 
-  // ── Stub seguro de SFV_SYNC (funciona sin Firebase-sync.js) ──
-  window.SFV_SYNC = window.SFV_SYNC || {
-    init:()=>{}, queueCtrlRecord:()=>{}, queueCtrlBatch:()=>{},
-    queueFile:()=>{}, queueEstado:()=>{},
-    forceSyncNow:()=>{ showToast('⚠️ Firebase no configurado. Ver firebase-sync.js en el APK'); },
-    getQueueCount:()=>0, getStatus:()=>({online:navigator.onLine,ready:false,pending:0})
-  };
+  const FB_PROJECT  = 'controlfotovoltaico';
+  const FB_API_KEY  = 'AIzaSyDHIE683vjeWp0yOO2cFIYrQJGHCNTS_gA';
+  const FB_BASE     = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents`;
+  const FB_STORAGE_BASE = `https://firebasestorage.googleapis.com/v0/b/${FB_PROJECT}.firebasestorage.app/o`;
 
-  function sfvSyncNow(){ window.SFV_SYNC.forceSyncNow(); }
-  window.sfvSyncNow = sfvSyncNow;
+  let _pollTimer  = null;
+  let _lastHash   = '';
+  let _isSaving   = false;
+  let _online     = navigator.onLine;
 
-  function updateSyncUI(){
-    const online = navigator.onLine;
-    const st = document.getElementById('syncDot');
-    const tx = document.getElementById('syncTxt');
-    if(st) st.textContent = online ? '🟢' : '🟠';
-    if(tx) tx.textContent = online ? 'En línea' : 'Sin internet — modo offline';
+  // ── Helpers ───────────────────────────────────────────────────────
+  function _pid(){ try{ return localStorage.getItem('sfv_mp_active_v1')||'arenal_2026'; }catch(e){return 'arenal_2026';} }
+  function _skey(){ const p=_pid(); return p==='arenal_2026'?'sfv_ctrl_v1':('sfv_p_'+p+'_ctrl_v1'); }
+  function _colURL(pid){ return `${FB_BASE}/projects/${pid}/control`; }
+  function _docURL(pid,id){ return `${FB_BASE}/projects/${pid}/control/${id}?key=${FB_API_KEY}`; }
+
+  // ── Convert JS object to Firestore value map ──────────────────────
+  function _toFV(val){
+    if(val===null||val===undefined) return {nullValue:null};
+    if(typeof val==='boolean') return {booleanValue:val};
+    if(typeof val==='number') return {doubleValue:val};
+    if(typeof val==='string') return {stringValue:val};
+    if(Array.isArray(val)) return {arrayValue:{values:val.map(_toFV)}};
+    if(typeof val==='object'){
+      const fields={};
+      Object.keys(val).forEach(k=>fields[k]=_toFV(val[k]));
+      return {mapValue:{fields}};
+    }
+    return {stringValue:String(val)};
   }
-  window.addEventListener('online',  updateSyncUI);
-  window.addEventListener('offline', updateSyncUI);
 
-  // SW: solo en contextos que lo soporten (APK / hosting HTTPS propio)
-  if('serviceWorker' in navigator){
-    const loc = window.location.hostname;
-    const isLocalHosting = loc !== 'www.claudeusercontent.com' && loc !== 'claude.ai' && loc !== '';
-    if(isLocalHosting){
-      window.addEventListener('load', ()=>{
-        navigator.serviceWorker.register('./sw.js')
-          .then(r => console.log('[SW] OK:', r.scope))
-          .catch(e => console.warn('[SW] No registrado (normal en preview):', e.message));
-      });
+  // ── Convert Firestore document fields back to plain JS object ─────
+  function _fromFDoc(doc){
+    if(!doc||!doc.fields) return null;
+    function _fromFV(fv){
+      if(!fv) return null;
+      if('nullValue'    in fv) return null;
+      if('booleanValue' in fv) return fv.booleanValue;
+      if('integerValue' in fv) return Number(fv.integerValue);
+      if('doubleValue'  in fv) return fv.doubleValue;
+      if('stringValue'  in fv) return fv.stringValue;
+      if('arrayValue'   in fv) return (fv.arrayValue.values||[]).map(_fromFV);
+      if('mapValue'     in fv){
+        const o={};
+        Object.keys(fv.mapValue.fields||{}).forEach(k=>o[k]=_fromFV(fv.mapValue.fields[k]));
+        return o;
+      }
+      return null;
+    }
+    const o={};
+    Object.keys(doc.fields).forEach(k=>o[k]=_fromFV(doc.fields[k]));
+    return o;
+  }
+
+  // ── Write one record to Firestore via REST PATCH ──────────────────
+  async function _writeDoc(pid, record){
+    if(!record||record.id==null) return false;
+    const now = new Date().toISOString();
+    const r   = Object.assign({}, record, {updatedAt: now});
+    const fields = {};
+    Object.keys(r).forEach(k=>fields[k]=_toFV(r[k]));
+    const url = _docURL(pid, String(r.id));
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({fields})
+    });
+    return res.ok;
+  }
+
+  // ── Batch-write all records ───────────────────────────────────────
+  async function _writeAll(records, pid){
+    if(!records||!records.length||!_online) return;
+    _isSaving = true;
+    _updUI(null);
+    try{
+      // Write in parallel batches of 20
+      const BATCH = 20;
+      for(let i=0; i<records.length; i+=BATCH){
+        const chunk = records.slice(i, i+BATCH);
+        await Promise.all(chunk.map(r=>_writeDoc(pid, r)));
+      }
+      _updUI(true);
+      console.log('[SFV Sync] ✅ Escritos', records.length, '→ pid:', pid);
+    }catch(e){
+      console.warn('[SFV Sync] writeAll error:', e.message);
+      _updUI(false);
+    } finally { _isSaving = false; }
+  }
+
+  // ── Read all documents in the control sub-collection ─────────────
+  async function _readAll(pid){
+    if(!_online) return null;
+    try{
+      const url = `${_colURL(pid)}?key=${FB_API_KEY}&pageSize=500`;
+      const res = await fetch(url);
+      if(!res.ok){ console.warn('[SFV Sync] read HTTP', res.status); return null; }
+      const body = await res.json();
+      if(body.error){ console.warn('[SFV Sync] Firestore error:', body.error.message); return null; }
+      const docs = body.documents||[];
+      return docs.map(d=>_fromFDoc(d)).filter(Boolean);
+    }catch(e){ console.warn('[SFV Sync] readAll error:', e.message); return null; }
+  }
+
+  // ── Merge local + remote by updatedAt ────────────────────────────
+  function _merge(local, remote){
+    const m={};
+    (local||[]).forEach(r=>{ if(r.id!=null) m[String(r.id)]=r; });
+    (remote||[]).forEach(r=>{
+      if(r.id==null) return;
+      const k=String(r.id), loc=m[k];
+      if(!loc||!loc.updatedAt||(r.updatedAt&&r.updatedAt>=loc.updatedAt)) m[k]=r;
+    });
+    return Object.values(m);
+  }
+
+  // ── Hash records for change detection ────────────────────────────
+  function _hash(records){
+    if(!records||!records.length) return '0';
+    return records.reduce((h,r)=>{
+      const k = String(r.id)+(r.updatedAt||'')+(r.estado||'');
+      let s=0; for(let i=0;i<k.length;i++) s=(s*31+k.charCodeAt(i))&0xffffffff;
+      return (h^s)&0xffffffff;
+    },0).toString(36);
+  }
+
+  // ── Apply merged records to UI ────────────────────────────────────
+  function _applyUI(records, pid){
+    if(pid && pid !== _pid()) return;
+    const k = _skey();
+    localStorage.setItem(k, JSON.stringify(records));
+    window.ctrlData = records;
+    if(typeof renderCtrl === 'function') renderCtrl();
+    if(typeof updateKPIs === 'function') updateKPIs();
+    if(typeof renderDir  === 'function') renderDir();
+  }
+
+  // ── Pull on startup ───────────────────────────────────────────────
+  async function _pull(){
+    const pid = _pid(), k = _skey();
+    // 1. Show local immediately
+    let local = []; try{ local=JSON.parse(localStorage.getItem(k)||'[]'); }catch(e){}
+    if(local.length){ window.ctrlData=local; if(typeof renderCtrl==='function')renderCtrl(); if(typeof updateKPIs==='function')updateKPIs(); }
+    // 2. Fetch remote
+    const remote = await _readAll(pid);
+    if(remote===null) return; // offline/error
+    if(!remote.length && local.length){ await _writeAll(local, pid); return; } // upload if Firestore empty
+    const merged = _merge(local, remote);
+    const newHash = _hash(merged);
+    if(newHash !== _lastHash){
+      _lastHash = newHash;
+      _applyUI(merged, pid);
+      showToast('🔁 Datos sincronizados ✓');
+    }
+    // 3. Also pull estados and edits on startup
+    if(window.SFV_SYNC){
+      window.SFV_SYNC.pullEstados();
+      window.SFV_SYNC.pullEdits();
     }
   }
 
-  // Cargar firebase-sync.js dinámicamente si existe (APK/hosting)
-  window.addEventListener('load', ()=>{
-    updateSyncUI();
-    const loc = window.location.hostname;
-    if(loc && loc !== 'www.claudeusercontent.com' && loc !== 'claude.ai'){
-      const s = document.createElement('script');
-      s.src = './firebase-sync.js';
-      s.onload = ()=>{
-        if(window.SFV_SYNC && window.SFV_SYNC.init !== (()=>{})){
-          setTimeout(()=>{
-            window.SFV_SYNC.init();
-            patchDashboardForSync();
-            setInterval(updateSyncQueueLabel, 5000);
-          }, 800);
-        }
+  // ── Polling loop ──────────────────────────────────────────────────
+  async function _poll(){
+    if(!_online || _isSaving) return;
+    const pid = _pid();
+    try{
+      const remote = await _readAll(pid);
+      if(remote===null) return;
+      const merged = _merge(window.ctrlData||[], remote);
+      const newHash = _hash(merged);
+      if(newHash !== _lastHash){
+        _lastHash = newHash;
+        _applyUI(merged, pid);
+        showToast('🔁 Actualización recibida desde otro dispositivo ✓');
+      }
+      // Also pull estados and edits periodically (every other poll = ~16s)
+      if(!_poll._cnt) _poll._cnt=0;
+      _poll._cnt++;
+      if(_poll._cnt % 2 === 0 && window.SFV_SYNC){
+        window.SFV_SYNC.pullEstados();
+        window.SFV_SYNC.pullEdits();
+      }
+    }catch(e){ console.warn('[SFV Poll]', e.message); }
+  }
+
+  function _startPoll(){
+    if(_pollTimer) clearInterval(_pollTimer);
+    _pollTimer = setInterval(_poll, 8000);
+    console.log('[SFV Sync] ⏱ Polling cada 8s');
+  }
+  function _stopPoll(){ if(_pollTimer){ clearInterval(_pollTimer); _pollTimer=null; } }
+
+  // ── UI indicator ─────────────────────────────────────────────────
+  function _updUI(ok){
+    const dot=document.getElementById('syncDot'), tx=document.getElementById('syncTxt');
+    if(!_online){ if(dot)dot.textContent='🟠'; if(tx)tx.textContent='Sin conexión — modo offline'; return; }
+    if(ok===true) { if(dot)dot.textContent='🟢'; if(tx)tx.textContent='Sincronizado'; }
+    else if(ok===false){ if(dot)dot.textContent='🟡'; if(tx)tx.textContent='Error de sincronización'; }
+    else              { if(dot)dot.textContent='🔵'; if(tx)tx.textContent='En línea'; }
+  }
+  window.addEventListener('online',  ()=>{ _online=true;  _updUI(null); _startPoll(); });
+  window.addEventListener('offline', ()=>{ _online=false; _updUI(null); _stopPoll();  });
+
+  // ── Public API ────────────────────────────────────────────────────
+  window.SFV_SYNC = {
+    init(){
+      _online = navigator.onLine;
+      if(_online){ _startPoll(); setTimeout(()=>_pull(), 1500); }
+      else { _updUI(null); }
+    },
+    restart(){
+      _stopPoll();
+      if(_online){ _startPoll(); setTimeout(()=>_pull(), 800); }
+    },
+    // Called immediately after saveControl()
+    afterSave(){
+      const pid=_pid(), records=window.ctrlData||[];
+      if(_online && records.length) _writeAll(records, pid).then(()=>{ _lastHash=_hash(records); });
+    },
+    // ── NEW: Sync estados to Firestore ────────────────────────────
+    async writeEstados(){
+      if(!_online) return;
+      const pid=_pid();
+      const key=(pid==='arenal_2026')?'sfv_est_v1':('sfv_p_'+pid+'_est_v1');
+      try{
+        const data=JSON.parse(localStorage.getItem(key)||'{}');
+        const fields={};
+        Object.keys(data).forEach(k=>fields['s'+k]=_toFV(data[k])); // prefix keys with 's' to avoid numeric-only keys
+        const url=`${FB_BASE}/projects/${pid}/estados/data?key=${FB_API_KEY}`;
+        await fetch(url,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});
+      }catch(e){console.warn('[SFV Sync] writeEstados error:',e.message);}
+    },
+    // ── NEW: Sync edits to Firestore ──────────────────────────────
+    async writeEdits(){
+      if(!_online) return;
+      const pid=_pid();
+      const key=(pid==='arenal_2026')?'sfv_edits_v1':('sfv_p_'+pid+'_edits_v1');
+      try{
+        const data=JSON.parse(localStorage.getItem(key)||'{}');
+        const fields={};
+        Object.keys(data).forEach(k=>fields['e'+k]=_toFV(data[k]));
+        const url=`${FB_BASE}/projects/${pid}/edits/data?key=${FB_API_KEY}`;
+        await fetch(url,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});
+      }catch(e){console.warn('[SFV Sync] writeEdits error:',e.message);}
+    },
+    // ── NEW: Pull estados + edits from Firestore ──────────────────
+    async pullEstados(){
+      if(!_online) return;
+      const pid=_pid();
+      try{
+        const url=`${FB_BASE}/projects/${pid}/estados/data?key=${FB_API_KEY}`;
+        const res=await fetch(url);
+        if(!res.ok) return;
+        const body=await res.json();
+        const remote=_fromFDoc(body);
+        if(!remote) return;
+        // Reconstruct keys (remove 's' prefix)
+        const clean={};
+        Object.keys(remote).forEach(k=>{
+          const realKey=k.startsWith('s')?k.slice(1):k;
+          clean[realKey]=remote[k];
+        });
+        const key=(pid==='arenal_2026')?'sfv_est_v1':('sfv_p_'+pid+'_est_v1');
+        const local=JSON.parse(localStorage.getItem(key)||'{}');
+        const merged=Object.assign({},local,clean);
+        localStorage.setItem(key,JSON.stringify(merged));
+        window.casaEst=merged;
+        if(typeof updateKPIs==='function') updateKPIs();
+        if(typeof renderDir==='function') renderDir();
+      }catch(e){console.warn('[SFV Sync] pullEstados error:',e.message);}
+    },
+    async pullEdits(){
+      if(!_online) return;
+      const pid=_pid();
+      try{
+        const url=`${FB_BASE}/projects/${pid}/edits/data?key=${FB_API_KEY}`;
+        const res=await fetch(url);
+        if(!res.ok) return;
+        const body=await res.json();
+        const remote=_fromFDoc(body);
+        if(!remote) return;
+        const clean={};
+        Object.keys(remote).forEach(k=>{
+          const realKey=k.startsWith('e')?k.slice(1):k;
+          clean[realKey]=remote[k];
+        });
+        const key=(pid==='arenal_2026')?'sfv_edits_v1':('sfv_p_'+pid+'_edits_v1');
+        const local=JSON.parse(localStorage.getItem(key)||'{}');
+        const merged=Object.assign({},local,clean);
+        localStorage.setItem(key,JSON.stringify(merged));
+        window.casaEd=merged;
+        if(typeof renderDir==='function') renderDir();
+      }catch(e){console.warn('[SFV Sync] pullEdits error:',e.message);}
+    },
+    forceSyncNow(){
+      if(!_online){ showToast('⚠️ Sin conexión a internet'); return; }
+      showToast('🔄 Sincronizando con Firestore...');
+      Promise.all([
+        _pull(),
+        this.pullEstados(),
+        this.pullEdits()
+      ]).then(()=> _writeAll(window.ctrlData||[], _pid()))
+       .then(()=>{ this.writeEstados(); this.writeEdits(); })
+       .then(()=>showToast('✅ Sync manual completado'));
+    },
+    pullNow(){ _pull(); this.pullEstados(); this.pullEdits(); },
+    // File/photo upload via Firebase Storage REST API
+    async queueFile(itemId, slotKey, blob, filename){
+      if(!_online) return;
+      const pid=_pid();
+      const path=encodeURIComponent(`${pid}/fotos/${itemId}/${filename}`);
+      const uploadURL=`${FB_STORAGE_BASE}/${path}?uploadType=media&name=${path}&key=${FB_API_KEY}`;
+      try{
+        const res = await fetch(uploadURL, {method:'POST', headers:{'Content-Type':blob.type||'image/jpeg'}, body:blob});
+        if(!res.ok) throw new Error('HTTP '+res.status);
+        console.log('[SFV Storage] ✅ Foto subida:', filename);
+      }catch(e){ console.warn('[SFV Storage]', e.message); }
+    },
+    getStatus(){ return{online:_online, pid:_pid()}; },
+    // Legacy stubs
+    queueCtrlRecord(){ this.afterSave(); },
+    queueCtrlBatch(){  this.afterSave(); },
+    queueEstado(){     this.afterSave(); },
+    getQueueCount(){ return 0; }
+  };
+  window.sfvSyncNow = ()=>window.SFV_SYNC.forceSyncNow();
+
+  // ── Patch saveControl ─────────────────────────────────────────────
+  function _patch(){
+    const orig=window.saveControl;
+    if(orig && !orig._sfvPatched){
+      window.saveControl = function(){
+        orig.apply(this, arguments);
+        window.SFV_SYNC.afterSave();
+        _updUI(null);
       };
-      s.onerror = ()=>{ console.info('[SFV] firebase-sync.js no disponible — modo local'); };
-      document.head.appendChild(s);
+      window.saveControl._sfvPatched = true;
+      console.log('[SFV Sync] ✅ saveControl hook activo');
+    }
+    // ── Patch saveEst → sync estados to Firestore ─────────────────
+    const origEst=window.saveEst;
+    if(origEst && !origEst._sfvPatched){
+      window.saveEst = function(){
+        origEst.apply(this, arguments);
+        if(window.SFV_SYNC) window.SFV_SYNC.writeEstados();
+      };
+      window.saveEst._sfvPatched = true;
+      console.log('[SFV Sync] ✅ saveEst hook activo');
+    }
+    // ── Patch saveEd → sync edits to Firestore ────────────────────
+    const origEd=window.saveEd;
+    if(origEd && !origEd._sfvPatched){
+      window.saveEd = function(){
+        origEd.apply(this, arguments);
+        if(window.SFV_SYNC) window.SFV_SYNC.writeEdits();
+      };
+      window.saveEd._sfvPatched = true;
+      console.log('[SFV Sync] ✅ saveEd hook activo');
+    }
+  }
+
+  // ── Init on load ─────────────────────────────────────────────────
+  window.addEventListener('load', ()=>{
+    _updUI(null);
+    const loc = window.location.hostname;
+    const isDeployed = loc && loc !== 'www.claudeusercontent.com' && loc !== 'claude.ai' && loc !== '';
+    if(isDeployed){
+      setTimeout(()=>{ window.SFV_SYNC.init(); _patch(); }, 1000);
     }
   });
 
-  function updateSyncQueueLabel(){
-    const n = window.SFV_SYNC.getQueueCount();
-    const el = document.getElementById('syncQueueLabel');
-    if(el) el.textContent = n > 0 ? n + ' pendientes de subir' : '';
-    const b = document.getElementById('syncBadge');
-    if(b){ b.textContent = n; b.style.display = n > 0 ? 'inline-block' : 'none'; }
-  }
+  // Stub for any legacy updateSyncQueueLabel calls
+  window.updateSyncQueueLabel = ()=>{};
 
-  function patchDashboardForSync(){
-    const origSC = window.saveControl;
-    if(origSC){
-      window.saveControl = function(){
-        origSC.apply(this, arguments);
-        if(window.ctrlData && window.SESSION){
-          const myData = window.SESSION.role === 'cuadrilla'
-            ? window.ctrlData.filter(r => String(r.cuadrilla) === String(window.SESSION.cuadrilla))
-            : window.ctrlData;
-          window.SFV_SYNC.queueCtrlBatch(myData);
-          updateSyncQueueLabel();
-        }
-      };
-    }
-    const origSE = window.syncEstado;
-    if(origSE){
-      window.syncEstado = function(item, estado){
-        origSE.apply(this, arguments);
-        if(item){ window.SFV_SYNC.queueEstado(item, estado); updateSyncQueueLabel(); }
-      };
-    }
-    console.log('[SFV] Hooks sync instalados');
-  }
 })(); // END sync IIFE
+</script>
 
+<script>
 // ═══════════════════════════════════════════════════════════════════
 // SISTEMA MULTI-PROYECTO — Byron Vizcaíno (solo master)
 // ═══════════════════════════════════════════════════════════════════
@@ -3601,24 +4331,49 @@ function getActiveProject(){
 // ── _loadActiveProject: carga el proyecto activo en CASAS + UI ───
 function _loadActiveProject(){
   const proj = getActiveProject();
-  // Load casas
+  const qs = proj.cuadrillas||ARENAL_PROJECT.cuadrillas;
+
+  // ── 1. Rebuild CASAS ──────────────────────────────────────────────
+  CASAS.length=0;
   if(proj.id==='arenal_2026'||!proj.casas||!proj.casas.length){
-    // Restore built-in Arenal CASAS
-    CASAS.length=0; let n=1;
+    let n=1;
     VEREDAS.forEach(v=>{const c=VC[v.name];for(let i=0;i<v.t;i++){
       CASAS.push({id:n,nombre:NOM[n-1]||'—',vereda:v.name,cuadrilla:v.q,
         lat:c[0]+rnd(0.022),lng:c[1]+rnd(0.022)});n++;}});
   } else {
-    CASAS.length=0;
-    proj.casas.forEach(c=>CASAS.push(c));
+    proj.casas.forEach(h=>CASAS.push(h));
   }
-  // Apply QN / QI from project cuadrillas
-  const qs = proj.cuadrillas||ARENAL_PROJECT.cuadrillas;
-  qs.forEach(q=>{QN[q.id]=q.zone; if(QI[q.id]){QI[q.id].n=q.name;QI[q.id].z=q.zone;QI[q.id].color=q.color;}});
-  // Apply sidebar / topbar text
+
+  // ── 2. Rebuild QC / QN / QI from project cuadrillas ──────────────
+  // Clear all keys first
+  Object.keys(QC).forEach(k=>delete QC[k]);
+  Object.keys(QN).forEach(k=>delete QN[k]);
+  Object.keys(QI).forEach(k=>delete QI[k]);
+  const QCOLORS=['#2E7D32','#1565C0','#E65100','#6A1B9A','#00838F','#F57F17','#4527A0','#880E4F'];
+  qs.forEach((q,i)=>{
+    const color = q.color||QCOLORS[i]||'#2E7D32';
+    QC[q.id] = color;
+    QN[q.id] = q.zone||q.name||('Cuadrilla '+q.id);
+    // Veredas de esta cuadrilla desde CASAS
+    const vSet=new Set(CASAS.filter(h=>h.cuadrilla===q.id).map(h=>h.vereda));
+    const cnt=CASAS.filter(h=>h.cuadrilla===q.id).length;
+    QI[q.id]={n:q.name||('Cuadrilla '+q.id),z:q.zone||('Zona '+q.id),
+              v:[...vSet].join(', ')||q.zone||'',t:cnt,color};
+  });
+
+  // ── 3. Update sidebar cuadrilla list ─────────────────────────────
+  const sbQEl=document.getElementById('sidebarCuadrillas');
+  if(sbQEl){
+    sbQEl.innerHTML=qs.map(q=>`<div class="ni"><span class="dot" style="background:${QC[q.id]}"></span>C${q.id} — ${q.name||q.zone||('Cuadrilla '+q.id)}</div>`).join('');
+  }
+
+  // ── 4. Apply topbar / sidebar labels ─────────────────────────────
   _applyProjectUI(proj);
-  // Prefix all storage keys with project ID to isolate data
+
+  // ── 5. Isolate storage keys per project ──────────────────────────
   _setProjectStorageKeys(proj.id);
+  // ── 6. Rebuild directorio cuadrilla tabs ─────────────────────────
+  if(typeof _renderDirQTabs==='function') _renderDirQTabs();
 }
 
 // ── Update UI labels with project info ──────────────────────────
@@ -3711,13 +4466,13 @@ function renderProjectList(){
       <div style="font-size:22px">${p.id===activeId?'📂':'📁'}</div>
       <div style="flex:1;min-width:0">
         <div style="font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px">
-          ${p.name} ${p.id===activeId?'<span style="background:#4CAF50;color:#fff;border-radius:10px;padding:1px 7px;font-size:9px">ACTIVO</span>':''}
+          ${p.name} <span style="background:${p.id===activeId?'#4CAF50':'#757575'};color:#fff;border-radius:10px;padding:1px 7px;font-size:9px">${p.id===activeId?'EN PANTALLA':'Activo'}</span>
         </div>
         <div style="font-size:10px;color:var(--mt)">${p.municipality}, ${p.department} • ${p.total||'?'} sistemas • ${(p.cuadrillas||[]).length} cuadrillas</div>
         <div style="font-size:10px;color:var(--mt)">Inicio: ${p.startDate||'—'} → Entrega: ${p.endDate||'—'}</div>
       </div>
       <div style="display:flex;gap:5px;flex-shrink:0">
-        ${p.id!==activeId?`<button onclick="switchProject('${p.id}')" style="background:#2E7D32;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:10px;font-weight:700;cursor:pointer">▶ Activar</button>`:''}
+        ${p.id!==activeId?`<button onclick="switchProject('${p.id}')" style="background:#2E7D32;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:10px;font-weight:700;cursor:pointer">📂 Mostrar</button>`:''}
         ${!p.isBuiltIn?`<button onclick="editProject('${p.id}')" style="background:#1565C0;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:10px;font-weight:700;cursor:pointer">✏️</button>`:''}
         ${!p.isBuiltIn?`<button onclick="deleteProject('${p.id}')" style="background:#C62828;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:10px;font-weight:700;cursor:pointer">🗑️</button>`:''}
       </div>
@@ -3725,13 +4480,47 @@ function renderProjectList(){
 }
 
 function switchProject(id){
+  // 1. Set active project + load all data (CASAS, QC/QN/QI, storage keys)
   localStorage.setItem(KMPACT, id);
   _loadActiveProject();
-  // Reset UI data
-  updateKPIs(); renderDir(); renderCtrl&&renderCtrl(); renderReportesGrid&&renderReportesGrid();
-  if(gmap){setTimeout(()=>{initMap();gmap.invalidateSize();},200);}
+
+  // 2. Rebuild the map with new cuadrilla layers
+  if(gmap){
+    Object.values(mLayers).forEach(l=>{try{gmap.removeLayer(l);}catch(e){}});
+    mLayers={};
+    _getActiveQIds().forEach(qid=>{mLayers[qid]=L.layerGroup().addTo(gmap);});
+    // Center map on new project data
+    if(CASAS.length){
+      const lats=CASAS.map(h=>h.lat).filter(Boolean);
+      const lngs=CASAS.map(h=>h.lng).filter(Boolean);
+      if(lats.length){
+        const midLat=(Math.min(...lats)+Math.max(...lats))/2;
+        const midLng=(Math.min(...lngs)+Math.max(...lngs))/2;
+        gmap.setView([midLat,midLng],12);
+      }
+    }
+    renderMap();
+    setTimeout(()=>gmap.invalidateSize(),200);
+  }
+
+  // 3. Refresh all UI panels
+  _renderDirQTabs();       // cuadrilla filter tabs in directorio
+  _renderQDistribution();  // distribution donut chart
+  _renderMapTabs();        // map filter tabs
+  _renderMapLegend();      // map legend
+  _rebuildVeredasChart();  // vereda bar chart (from CASAS)
+  _rebuildAvanceChart();   // avance line chart (from project dates + total)
+  initSemChips();          // weekly plan chips
+  updateKPIs();            // all KPI numbers
+  if(typeof renderCtrl==='function') renderCtrl();
+  renderDir();
+  if(typeof renderReportesGrid==='function') renderReportesGrid();
+
+  // 4. Restart Firebase realtime listener for new project
+  if(window.SFV_SYNC&&typeof window.SFV_SYNC.restart==='function') window.SFV_SYNC.restart();
+
   closeMpPanel();
-  showToast('📂 Proyecto activo: '+getActiveProject().name);
+  showToast('📂 Proyecto: '+getActiveProject().name+' — '+CASAS.length+' viviendas cargadas');
 }
 
 // ── Edit project ─────────────────────────────────────────────────
@@ -3747,6 +4536,7 @@ function editProject(id){
   document.getElementById('mpf-install').value=p.installStart||'';
   document.getElementById('mpf-end').value=p.endDate||'';
   document.getElementById('mpf-total').value=p.total||'';
+  if(document.getElementById('mpf-daily')) document.getElementById('mpf-daily').value=p.dailyTarget||'';
   document.getElementById('mpNewTitle').textContent='✏️ Editar: '+p.name;
   _renderCuadrillaConfig(p.cuadrillas||[]);
   mpTab('new', document.querySelectorAll('#mpModal .proj-tab')[1]);
@@ -3762,6 +4552,7 @@ function newProjectForm(){
   document.getElementById('mpf-install').value='';
   document.getElementById('mpf-end').value='';
   document.getElementById('mpf-total').value='';
+  if(document.getElementById('mpf-daily')) document.getElementById('mpf-daily').value='';
   document.getElementById('mpNewTitle').textContent='➕ Nuevo Proyecto';
   _mpImportParsed=[];
   document.getElementById('mpImportPreview').style.display='none';
@@ -3827,32 +4618,54 @@ function saveMultiProject(){
   const dept=document.getElementById('mpf-dept').value.trim();
   if(!name||!muni){showToast('⚠️ Nombre y municipio son requeridos');return;}
   const cuadrillas=_collectCuadrillas();
-  // Auto-distribute casas if imported
+  const isNew=!_mpEditingId;
+  const projId=_mpEditingId||('proj_'+Date.now());
   let casas=_mpImportParsed.length>0?_autoDistributeCasas([..._mpImportParsed],cuadrillas):null;
+  // Per-project passwords: keep existing if editing, generate new if new
+  const existingPwds=_mpEditingId?(getAllProjects().find(p=>p.id===_mpEditingId)?.passwords||{}):{};
+  const passwords={};
+  cuadrillas.forEach(q=>{ passwords['c'+q.id]=existingPwds['c'+q.id]||_genPwd(); });
   const proj={
-    id: _mpEditingId || ('proj_'+Date.now()),
+    id: projId,
     name, municipality:muni, department:dept||'Colombia', country:'Colombia',
     subtitle: document.getElementById('mpf-subtitle').value.trim()||(casas?(casas.length+' Sistemas'):name),
     startDate: document.getElementById('mpf-start').value||'',
     installStart: document.getElementById('mpf-install').value||'',
     endDate: document.getElementById('mpf-end').value||'',
     total: casas?casas.length:parseInt(document.getElementById('mpf-total').value)||0,
-    cuadrillas, isBuiltIn:false,
+    dailyTarget: parseInt(document.getElementById('mpf-daily')?.value)||0,
+    cuadrillas, passwords, isBuiltIn:false,
     casas: casas||(_mpEditingId?getAllProjects().find(p=>p.id===_mpEditingId)?.casas:null),
     createdAt: new Date().toISOString()
   };
-  // Save to project list
   const all=getAllProjects().filter(p=>p.id!=='arenal_2026');
   const idx=all.findIndex(p=>p.id===proj.id);
   if(idx>=0) all[idx]=proj; else all.push(proj);
-  // Re-insert Arenal at start
   lsS(KMP,[ARENAL_PROJECT,...all]);
+  localStorage.setItem(KMPACT, proj.id);
+  _loadActiveProject();
   _mpImportParsed=[];
   renderProjectList();
   mpTab('list', document.querySelector('#mpModal .proj-tab'));
-  showToast('✅ Proyecto "'+ name+'" guardado');
+  updateKPIs(); renderDir();
+  if(typeof renderCtrl==='function') renderCtrl();
+  _rebuildVeredasChart();
+  if(gmap){
+    Object.values(mLayers).forEach(l=>{try{gmap.removeLayer(l);}catch(e){}});
+    mLayers={};
+    const qs=(proj.cuadrillas||[{id:1},{id:2},{id:3},{id:4}]);
+    qs.forEach(q=>{mLayers[q.id]=L.layerGroup().addTo(gmap);});
+    renderMap(); setTimeout(()=>{gmap.invalidateSize();},200);
+  }
+  _renderDirQTabs();
+  showToast('✅ Proyecto "'+name+'" guardado y cargado');
+  if(isNew){
+    const lines=cuadrillas.map(q=>'  C'+q.id+' ('+q.name+'): '+passwords['c'+q.id]).join('\n');
+    setTimeout(()=>{
+      alert('✅ Proyecto creado: '+name+'\n\n🔑 CONTRASEÑAS CUADRILLAS (guárdalas):\n'+lines+'\n\nEl master puede verlas en: Administración → Panel contraseñas');
+    },400);
+  }
 }
-
 // ── Auto-distribute users to cuadrillas equitably ───────────────
 function _autoDistributeCasas(casas, cuadrillas){
   const nq=cuadrillas.length;
@@ -3895,25 +4708,25 @@ function downloadMpTemplate(){
   if(!window.XLSX){showToast('⚠️ Librería Excel no cargada');return;}
   const wb=XLSX.utils.book_new();
   const data=[
-    ['Item','Nombre Completo','Vereda','Latitud','Longitud'],
-    [1,'JUAN PEREZ GARCIA','La Cañada',8.3775,-74.1866],
-    [2,'MARIA RODRIGUEZ LOPEZ','Zabaleta',8.3601,-74.1750],
-    [3,'CARLOS GOMEZ SILVA','La Dorada',8.3401,-74.1650],
-    [4,'ANA MARTINEZ RUIZ','La Bonita',8.4101,-74.1451]
+    ['Item','Nombre y Apellidos','Cédula','Vereda','Latitud','Longitud'],
+    [1,'JUAN PEREZ GARCIA','1007274814','La Cañada',8.3775,-74.1866],
+    [2,'MARIA RODRIGUEZ LOPEZ','98649723','Zabaleta',8.3601,-74.1750],
+    [3,'CARLOS GOMEZ SILVA','1048555190','La Dorada',8.3401,-74.1650],
+    [4,'ANA MARTINEZ RUIZ','1048996311','La Bonita',8.4101,-74.1451]
   ];
   const ws=XLSX.utils.aoa_to_sheet(data);
-  ws['!cols']=[{wch:8},{wch:35},{wch:22},{wch:14},{wch:14}];
+  ws['!cols']=[{wch:8},{wch:35},{wch:18},{wch:22},{wch:14},{wch:14}];
   XLSX.utils.book_append_sheet(wb,ws,'Beneficiarios');
   const inst=XLSX.utils.aoa_to_sheet([
     ['INSTRUCCIONES'],[''],
     ['Columna','Descripción','Requerido'],
     ['Item','Número único de ítem (1, 2, 3...)','Opcional (se asigna automáticamente)'],
-    ['Nombre Completo','Nombre completo del beneficiario','SI'],
+    ['Nombre y Apellidos','Nombre completo del beneficiario','SI'],
+    ['Cédula','Número de cédula o documento de identidad','Recomendado'],
     ['Vereda','Nombre de la vereda o sector','SI'],
     ['Latitud','Latitud GPS decimal, ej: 8.3775','Opcional'],
     ['Longitud','Longitud GPS decimal, ej: -74.1866','Opcional'],
-    [''],['NOTA: Las cuadrillas se asignan automáticamente de forma equitativa'],
-    ['Si quieres asignar cuadrillas manualmente, agrega columna "Cuadrilla" con números 1,2,3...']
+    [''],['NOTA: La cuadrilla se asigna automáticamente de forma equitativa entre las cuadrillas del proyecto']
   ]);
   XLSX.utils.book_append_sheet(wb,inst,'Instrucciones');
   sfvDownload('plantilla_nuevo_proyecto.xlsx',
@@ -3935,12 +4748,13 @@ function handleMpImportFile(file){
       if(!rows.length){showToast('⚠️ Archivo vacío');return;}
       const keys=Object.keys(rows[0]);
       const col=(...candidates)=>{for(const c of candidates){const f=keys.find(k=>k.toLowerCase().trim().includes(c.toLowerCase()));if(f)return f;}return null;};
-      const cItem=col('item','#','id');
-      const cNom=col('nombre','beneficiario','name');
-      const cVer=col('vereda','sector','localidad','location');
+      const cItem=col('item','#','id','numero','nro');
+      const cNom=col('nombre','beneficiario','name','titular');
+      const cVer=col('vereda','sector','localidad','location','barrio');
       const cLat=col('lat','latitud','latitude');
       const cLng=col('lng','lon','longitud','longitude');
       const cQ=col('cuadrilla','equipo','grupo','team');
+      const cDoc=col('cedula','documento','doc','identificacion','cc','nit','dni','identidad');
       if(!cNom||!cVer){showToast('⚠️ Se requieren columnas: Nombre y Vereda');return;}
       const casas=[]; let errs=0, autoId=1;
       rows.forEach((r,i)=>{
@@ -3951,7 +4765,8 @@ function handleMpImportFile(file){
         const q=cQ&&r[cQ]?parseInt(r[cQ]):0; // 0 = auto-assign later
         const lat=cLat&&r[cLat]?parseFloat(r[cLat]):null;
         const lng=cLng&&r[cLng]?parseFloat(r[cLng]):null;
-        casas.push({id:isNaN(id)?autoId:id, nombre, vereda,
+        const cedula=cDoc&&r[cDoc]?String(r[cDoc]).trim():'';
+        casas.push({id:isNaN(id)?autoId:id, nombre, vereda, cedula,
           cuadrilla:isNaN(q)?0:q,
           lat:isNaN(lat)||lat===null?null:lat,
           lng:isNaN(lng)||lng===null?null:lng});
@@ -3968,7 +4783,7 @@ function handleMpImportFile(file){
         '✅ <b>'+casas.length+'</b> beneficiarios cargados'+(errs?' (<span style="color:#E65100">'+errs+' ignoradas</span>)':'')+
         '<br><small style="color:var(--mt)">Las cuadrillas se asignarán automáticamente al guardar si no están definidas</small>';
       document.getElementById('mpImportTableBody').innerHTML=
-        prev.map(c=>'<tr><td>'+c.id+'</td><td>'+c.nombre+'</td><td>'+c.vereda+'</td><td>'+(c.cuadrilla||'auto')+'</td><td>'+(c.lat?c.lat.toFixed(4):'auto')+'</td><td>'+(c.lng?c.lng.toFixed(4):'auto')+'</td></tr>').join('')+
+        prev.map(c=>'<tr><td>'+c.id+'</td><td style="font-family:monospace;font-size:10px">'+(c.cedula||'—')+'</td><td>'+c.nombre+'</td><td>'+c.vereda+'</td><td>'+(c.cuadrilla||'auto')+'</td><td>'+(c.lat?c.lat.toFixed(4):'auto')+'</td><td>'+(c.lng?c.lng.toFixed(4):'auto')+'</td></tr>').join('')+
         (casas.length>6?'<tr><td colspan="6" style="text-align:center;color:var(--mt);font-style:italic">... y '+(casas.length-6)+' más</td></tr>':'');
       document.getElementById('mpImportPreview').style.display='block';
       document.getElementById('mpImportZone').classList.add('has-file');
@@ -3976,10 +4791,8 @@ function handleMpImportFile(file){
   };
   reader.readAsArrayBuffer(file);
 }
-
-
-
 </script>
+
 
 <!-- ══════════════════════════════════════════════════════════
      MODAL: GESTIÓN MULTI-PROYECTO
@@ -4040,11 +4853,15 @@ function handleMpImportFile(file){
             <label>Total sistemas</label>
             <input id="mpf-total" type="number" min="1" placeholder="(se calcula al importar)">
           </div>
+          <div class="proj-field">
+            <label>🎯 Meta diaria (sistemas/día)</label>
+            <input id="mpf-daily" type="number" min="1" placeholder="Ej: 5 (dejá vacío = auto)">
+          </div>
         </div>
         <div style="background:#E8F5E9;border:1px solid #A5D6A7;border-radius:8px;padding:10px 12px;font-size:11px;margin-bottom:10px">
           <b>📥 Importar lista de beneficiarios</b><br>
-          Columnas Excel: <b>Nombre Completo</b>, <b>Vereda</b>, Latitud (opc), Longitud (opc)<br>
-          Las cuadrillas se asignan equitativamente de forma automática.
+          Columnas: <b>Ítem</b>, <b>Nombre y Apellidos</b>, <b>Cédula</b>, <b>Vereda</b>, Latitud (opc), Longitud (opc)<br>
+          La cuadrilla se asigna automáticamente de forma equitativa.
           <br><button onclick="downloadMpTemplate()" style="background:#2E7D32;color:#fff;border:none;border-radius:5px;padding:4px 12px;font-size:10px;font-weight:700;cursor:pointer;margin-top:5px">
             📥 Descargar plantilla Excel
           </button>
@@ -4060,7 +4877,7 @@ function handleMpImportFile(file){
         <div id="mpImportPreview" style="display:none;margin-top:10px">
           <div id="mpImportStats" style="font-size:12px;font-weight:600;color:var(--acc);margin-bottom:6px"></div>
           <div class="import-preview">
-            <table><thead><tr><th>#</th><th>Nombre</th><th>Vereda</th><th>C</th><th>Lat</th><th>Lng</th></tr></thead>
+            <table><thead><tr><th>#</th><th>Cédula</th><th>Nombre</th><th>Vereda</th><th>C</th><th>Lat</th><th>Lng</th></tr></thead>
             <tbody id="mpImportTableBody"></tbody></table>
           </div>
         </div>
@@ -4086,36 +4903,5 @@ function handleMpImportFile(file){
     </div>
   </div>
 </div>
-<script type="module">
-
-import { tomarFoto } from './js/camera-service.js';
-import { obtenerGPS } from './js/gps-service.js';
-import { guardarOffline } from './js/offline-db.js';
-
-async function registrarEvidencia(){
-
-    const gps = await obtenerGPS();
-    const foto = await tomarFoto();
-
-    const evidencia = {
-
-        foto: foto,
-        lat: gps.lat,
-        lng: gps.lng,
-        fecha: new Date(),
-        cuadrilla: "C1",
-        vivienda: "001"
-
-    };
-
-    await guardarOffline(evidencia);
-
-    alert("Evidencia guardada");
-
-}
-
-window.registrarEvidencia = registrarEvidencia;
-
-</script>
 </body>
 </html>
