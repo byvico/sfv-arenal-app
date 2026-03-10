@@ -394,17 +394,20 @@ button,select,.bs,.bdel,.bfile,.bsave,.btn,.mcls{-webkit-tap-highlight-color:tra
   <div class="lcrd">
     <div style="font-size:40px;margin-bottom:10px">🔐</div>
     <h2>Acceso al Dashboard</h2>
-    <p>Ingresa tu contraseña de cuadrilla o contraseña maestra</p>
+    <p>Ingresa tu usuario y contraseña para acceder</p>
+    <div class="pw-wrap" style="margin-bottom:8px">
+      <input type="text" id="loginUser" placeholder="Usuario" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('loginInput').focus()" style="width:100%;padding:11px 14px;border:2px solid var(--brd);border-radius:10px;font-size:13px;font-family:'DM Sans',sans-serif;outline:none;transition:border .2s">
+    </div>
     <div class="pw-wrap">
-      <input type="password" id="loginInput" placeholder="Contraseña de acceso..." onkeydown="if(event.key==='Enter')doLogin()">
+      <input type="password" id="loginInput" placeholder="Contraseña" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
       <span class="pw-eye" onclick="togglePwd('loginInput',this)">👁</span>
     </div>
     <button class="btn-login" onclick="doLogin()">🔓 Iniciar sesión</button>
     <button class="btn-view" onclick="doLoginViewer()">👁 Solo visualizar (sin edición)</button>
     <div class="lerr" id="loginErr"></div>
     <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-top:13px">
-      <span style="padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700;border:1px solid var(--brd);color:var(--mt)">Cuadrilla 1–4</span>
-      <span style="padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700;border:1px solid var(--brd);color:var(--mt)">Contraseña maestra</span>
+      <span style="padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700;border:1px solid var(--brd);color:var(--mt)">Administrador</span>
+      <span style="padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700;border:1px solid var(--brd);color:var(--mt)">Cuadrilla + Proyecto</span>
       <span style="padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700;border:1px solid var(--brd);color:var(--mt)">Visitante autorizado</span>
     </div>
   </div>
@@ -742,12 +745,15 @@ button,select,.bs,.bdel,.bfile,.bsave,.btn,.mcls{-webkit-tap-highlight-color:tra
     <div style="font-family:'Syne',sans-serif;font-size:14px;font-weight:800;text-align:center;margin-bottom:6px" id="mconfTitle">Confirmar acción</div>
     <div style="font-size:11px;color:var(--mt);text-align:center;margin-bottom:14px;line-height:1.5" id="mconfMsg">¿Estás seguro?</div>
     <div style="margin-bottom:12px">
-      <label style="font-size:10px;font-weight:700;color:var(--mt);display:block;margin-bottom:4px;text-transform:uppercase">🔑 Contraseña de administrador</label>
+      <label style="font-size:10px;font-weight:700;color:var(--mt);display:block;margin-bottom:4px;text-transform:uppercase">🔑 Credenciales de administrador</label>
+      <div style="display:flex;gap:5px;margin-bottom:5px">
+        <input type="text" id="mconfUser" placeholder="Usuario admin" style="flex:1;padding:8px 10px;border:1.5px solid var(--brd);border-radius:8px;font-size:12px;font-family:inherit" autocomplete="username">
+      </div>
       <div style="display:flex;gap:5px">
-        <input type="password" id="mconfPwd" placeholder="Ingresa tu contraseña master" style="flex:1;padding:8px 10px;border:1.5px solid var(--brd);border-radius:8px;font-size:12px;font-family:inherit" onkeydown="if(event.key==='Enter')executeMasterConfirm()">
+        <input type="password" id="mconfPwd" placeholder="Contraseña admin" style="flex:1;padding:8px 10px;border:1.5px solid var(--brd);border-radius:8px;font-size:12px;font-family:inherit" onkeydown="if(event.key==='Enter')executeMasterConfirm()" autocomplete="current-password">
         <button onclick="togglePwd('mconfPwd',this)" style="padding:6px 9px;border:1.5px solid var(--brd);border-radius:8px;background:var(--sur);cursor:pointer">👁</button>
       </div>
-      <div style="font-size:10px;color:#C62828;margin-top:4px;display:none" id="mconfErr">❌ Contraseña incorrecta</div>
+      <div style="font-size:10px;color:#C62828;margin-top:4px;display:none" id="mconfErr">❌ Credenciales incorrectas</div>
     </div>
     <div style="display:flex;gap:7px">
       <button onclick="executeMasterConfirm()" style="flex:1;padding:9px;background:#C62828;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif" id="mconfBtn">Confirmar</button>
@@ -1012,10 +1018,20 @@ VEREDAS.forEach(v=>{const c=VC[v.name];for(let i=0;i<v.t;i++){CASAS.push({id:_n,
 
 
 // ══════════════════════════════════════════════════════════
-// AUTH — contraseñas y sesión
+// AUTH — usuario + contraseña · credenciales admin protegidas
 // ══════════════════════════════════════════════════════════
 const AUTH_KEY='sfv_auth_v2';
-const DEFAULT_PWD={master:'3162436567Cutre*',c1:'C1*arenal_2026',c2:'C2*arenal_2026',c3:'C3*arenal_2026',c4:'C4*arenal_2026',visitors:[]};
+// Admin credential hash (SHA-256 of "user:password") — plaintext NEVER in source
+const _ADMIN_HASH='9dd33c5afe109e132d1b368cdebe3aa1dafa7760a14ea08b63c0e9c794a86923';
+// SHA-256 helper (async — uses native Web Crypto)
+async function _sha256(str){
+  const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+// Slugify for username generation
+function _slugify(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,'').slice(0,15);}
+
+const DEFAULT_PWD={c1:'C1*arenal_2026',c2:'C2*arenal_2026',c3:'C3*arenal_2026',c4:'C4*arenal_2026',visitors:[]};
 // visitors: [{id,name,password,canEdit}]
 let SESSION=null;
 
@@ -1039,33 +1055,38 @@ function getProjPwds(pid){
   return proj?.passwords||{};
 }
 
-function doLogin(){
+async function doLogin(){
+  const user=(document.getElementById('loginUser')?.value||'').trim().toLowerCase();
   const pwd=document.getElementById('loginInput').value;
   document.getElementById('loginErr').textContent='';
-  if(!pwd){document.getElementById('loginErr').textContent='Ingresa una contraseña';return;}
-  
-  // 1. Master password (global — same for all projects)
-  const globalPwds=getPwds();
-  if(pwd===globalPwds.master){
-    SESSION={role:'master',cuadrilla:null,name:'Byron Vizcaíno',canEdit:true};
-    startApp(); return;
-  }
-  
-  // 2. Search ALL projects for matching cuadrilla password
-  //    FIX: Arenal stores passwords in global store (sfv_auth_v2), NOT in project object.
-  //    We merge them here so every project is checked uniformly.
-  //    Each password is bound to exactly ONE project — no cross-project leaks.
+  if(!user||!pwd){document.getElementById('loginErr').textContent='Ingresa usuario y contraseña';return;}
+
+  // ── 1. Admin login (hash-protected — credentials NEVER in source) ──
+  try{
+    const hash=await _sha256(user+':'+pwd);
+    if(hash===_ADMIN_HASH){
+      SESSION={role:'master',cuadrilla:null,name:'Administrador',canEdit:true};
+      startApp(); return;
+    }
+  }catch(e){console.warn('SHA-256 not available, skipping admin hash check');}
+
+  // ── 2. Cuadrilla login: search ALL projects by username ───────────
   if(typeof getAllProjects==='function'){
     const allProjs=getAllProjects();
     for(const proj of allProjs){
-      // Build password map: Arenal uses global store, others use proj.passwords
-      const ppwds = (proj.id==='arenal_2026')
-        ? {c1:globalPwds.c1, c2:globalPwds.c2, c3:globalPwds.c3, c4:globalPwds.c4}
-        : (proj.passwords||{});
-      const maxQ = (proj.cuadrillas||[]).length || 4;
-      for(let q=1; q<=maxQ; q++){
-        if(ppwds['c'+q] && pwd===ppwds['c'+q]){
-          // ✅ Match — this password belongs to this specific project
+      const ppwds=proj.passwords||{};
+      const pusers=proj.usernames||{};
+      // Also check Arenal legacy passwords (stored in global store)
+      const isArenal=(proj.id==='arenal_2026');
+      const globalPwds=isArenal?getPwds():{};
+      const maxQ=(proj.cuadrillas||[]).length||4;
+      for(let q=1;q<=maxQ;q++){
+        const uKey='c'+q;
+        const expectedUser=(pusers[uKey]||'').toLowerCase();
+        const expectedPwd=ppwds[uKey]||(isArenal?globalPwds[uKey]:'')||'';
+        if(!expectedUser||!expectedPwd) continue;
+        if(user===expectedUser && pwd===expectedPwd){
+          // ✅ Match — this user belongs to THIS specific project
           localStorage.setItem('sfv_mp_active_v1', proj.id);
           const cuadrilla=proj.cuadrillas?proj.cuadrillas.find(x=>x.id===q):null;
           SESSION={role:'cuadrilla',cuadrilla:q,name:(cuadrilla?.name||'Cuadrilla '+q),canEdit:true,projectId:proj.id};
@@ -1074,15 +1095,16 @@ function doLogin(){
       }
     }
   }
-  
-  // 3. Visitor passwords
-  const vis=globalPwds.visitors?.find(v=>v.password===pwd);
+
+  // ── 3. Visitor login (password-only for backward compat) ──────────
+  const globalPwds=getPwds();
+  const vis=globalPwds.visitors?.find(v=>v.password===pwd && (!v.username || v.username.toLowerCase()===user));
   if(vis){SESSION={role:'visitor',cuadrilla:null,name:vis.name,canEdit:vis.canEdit,visId:vis.id};startApp();return;}
-  
-  document.getElementById('loginErr').textContent='❌ Contraseña incorrecta. Intenta de nuevo.';
+
+  document.getElementById('loginErr').textContent='❌ Usuario o contraseña incorrectos.';
 }
 function doLoginViewer(){SESSION={role:'viewer',cuadrilla:null,name:'Visitante (solo lectura)',canEdit:false};startApp();}
-function doLogout(){stopNotifPolling();SESSION=null;pendingNotifQueue=[];currentNotifIdx=0;document.getElementById('app').classList.remove('visible');document.getElementById('authOverlay').style.display='flex';document.getElementById('loginInput').value='';}
+function doLogout(){stopNotifPolling();SESSION=null;pendingNotifQueue=[];currentNotifIdx=0;document.getElementById('app').classList.remove('visible');document.getElementById('authOverlay').style.display='flex';document.getElementById('loginInput').value='';document.getElementById('loginUser').value='';}
 function isMaster(){return SESSION?.role==='master';}
 function isViewer(){return !SESSION?.canEdit;}
 function canEditQ(q){if(!SESSION||isViewer())return false;if(isMaster())return true;if(SESSION.role==='cuadrilla')return SESSION.cuadrilla===q;if(SESSION.role==='visitor'&&SESSION.canEdit)return true;return false;}
@@ -1520,26 +1542,15 @@ function saveControl(){
 }
 
 async function renderCtrl(){
-  // visible rows: cuadrilla users only see their unsaved rows (_new flag)
-  // After pressing "Guardar", _new is removed → rows disappear from table (data persists in system)
-  // Master/admin sees ALL rows from ALL cuadrillas
-  const vis=SESSION?.role==='cuadrilla'
-    ?ctrlData.filter(r=>r._new && String(r.cuadrilla)===String(SESSION.cuadrilla))
-    :ctrlData;
+  // visible rows filtered by cuadrilla if cuadrilla user
+  const vis=SESSION?.role==='cuadrilla'?ctrlData.filter(r=>String(r.cuadrilla)===String(SESSION.cuadrilla)):ctrlData;
   // refresh file counts
   const ids=[...new Set(vis.map(r=>r.item).filter(Boolean))];
   await refreshFileCounts(ids);
 
   const tbody=document.getElementById('ctrlBody');tbody.innerHTML='';
   if(!vis.length){
-    // Count total saved records for this cuadrilla to show context
-    const savedCount=SESSION?.role==='cuadrilla'
-      ?ctrlData.filter(r=>!r._new && String(r.cuadrilla)===String(SESSION.cuadrilla)).length
-      :0;
-    const emptyMsg=savedCount>0
-      ?'✅ '+savedCount+' registros guardados. Haz clic en "+ Agregar" para registrar una nueva instalación.'
-      :'Sin registros. Haz clic en "+ Agregar" para iniciar el control diario.';
-    tbody.innerHTML='<tr><td colspan="11" style="text-align:center;padding:26px;color:var(--mt)">'+emptyMsg+'</td></tr>';
+    tbody.innerHTML='<tr><td colspan="11" style="text-align:center;padding:26px;color:var(--mt)">Sin registros. Haz clic en "+ Agregar" para iniciar el control diario.</td></tr>';
     updateKPIs();return;
   }
   vis.forEach(row=>{
@@ -1980,20 +1991,25 @@ function openMasterConfirm(title,msg,callback){
   _masterConfirmCallback=callback;
   document.getElementById('mconfTitle').textContent=title;
   document.getElementById('mconfMsg').innerHTML=msg;
+  if(document.getElementById('mconfUser')) document.getElementById('mconfUser').value='';
   document.getElementById('mconfPwd').value='';
   document.getElementById('mconfErr').style.display='none';
   document.getElementById('masterConfirmOverlay').classList.add('open');
-  setTimeout(()=>document.getElementById('mconfPwd').focus(),80);
+  setTimeout(()=>(document.getElementById('mconfUser')||document.getElementById('mconfPwd')).focus(),80);
 }
 function closeMasterConfirm(){
   document.getElementById('masterConfirmOverlay').classList.remove('open');
   _masterConfirmCallback=null;
 }
-function executeMasterConfirm(){
+async function executeMasterConfirm(){
+  const user=(document.getElementById('mconfUser')?.value||'').trim().toLowerCase();
   const pwd=document.getElementById('mconfPwd').value;
   const err=document.getElementById('mconfErr');
-  const pwds=getPwds();
-  if(pwd!==pwds.master){err.style.display='block';err.textContent='❌ Contraseña incorrecta';document.getElementById('mconfPwd').focus();return;}
+  if(!user||!pwd){err.style.display='block';err.textContent='❌ Ingresa usuario y contraseña';return;}
+  try{
+    const hash=await _sha256(user+':'+pwd);
+    if(hash!==_ADMIN_HASH){err.style.display='block';err.textContent='❌ Credenciales incorrectas';document.getElementById('mconfPwd').focus();return;}
+  }catch(e){err.style.display='block';err.textContent='❌ Error de verificación';return;}
   err.style.display='none';
   document.getElementById('masterConfirmOverlay').classList.remove('open');
   if(_masterConfirmCallback){
@@ -2803,20 +2819,38 @@ function openChangeMyCuadrillaPwd(){
 }
 function saveMyNewPwd(){
   if(SESSION?.role!=='cuadrilla')return;
-  const pwds=getPwds();
+  const pid=SESSION.projectId||getActiveProjectId();
+  // Get current password from the correct store
+  let currentPwd='';
+  if(pid==='arenal_2026'){
+    currentPwd=getPwds()['c'+SESSION.cuadrilla]||'';
+  } else {
+    const proj=getAllProjects().find(p=>p.id===pid);
+    currentPwd=proj?.passwords?.['c'+SESSION.cuadrilla]||'';
+  }
   const cur=document.getElementById('mpCurrent').value;
   const nw=document.getElementById('mpNew').value.trim();
   const cf=document.getElementById('mpConfirm').value.trim();
   const errEl=document.getElementById('mpErr');
   errEl.textContent='';
   // Validate current password
-  if(cur!==pwds['c'+SESSION.cuadrilla]){errEl.textContent='❌ Contraseña actual incorrecta';return;}
+  if(cur!==currentPwd){errEl.textContent='❌ Contraseña actual incorrecta';return;}
   if(nw.length<6){errEl.textContent='❌ La nueva contraseña debe tener al menos 6 caracteres';return;}
   if(nw!==cf){errEl.textContent='❌ Las contraseñas nuevas no coinciden';return;}
-  // Save
-  pwds['c'+SESSION.cuadrilla]=nw;
-  savePwdStore(pwds);
-  // Update current session context so they don't get locked out immediately
+  // Save to the correct store
+  if(pid==='arenal_2026'){
+    const pwds=getPwds();
+    pwds['c'+SESSION.cuadrilla]=nw;
+    savePwdStore(pwds);
+  } else {
+    const KMP='sfv_mp_projects_v1';
+    const all=JSON.parse(localStorage.getItem(KMP)||'[]');
+    const proj=all.find(p=>p.id===pid);
+    if(proj&&proj.passwords){
+      proj.passwords['c'+SESSION.cuadrilla]=nw;
+      localStorage.setItem(KMP,JSON.stringify(all));
+    }
+  }
   document.getElementById('myPwdModal').classList.remove('open');
   showToast('🔐 Contraseña de C'+SESSION.cuadrilla+' actualizada correctamente. El master puede verla en su panel.');
   notifyPasswordChange(SESSION.cuadrilla);
@@ -2834,20 +2868,25 @@ function renderPwdPanel(){
   const pwds=getPwds();
   const cont=document.getElementById('pwdPanelContent');
   let html='';
-  // Contraseña maestra
-  html+='<div style="font-size:11px;font-weight:800;color:var(--txt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">🔑 Contraseña Maestra (Byron Vizcaíno)</div>';
-  html+='<div class="ppfield"><label><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#F57F17"></span> Contraseña maestra</label>';
-  html+='<div class="ppr"><input type="password" id="ppMaster" value="'+pwds.master+'"><button onclick="togglePwd(\'ppMaster\',this)">👁</button></div></div>';
-  // Show per-project passwords
+  // Admin info (no longer editable — hash-based)
+  html+='<div style="font-size:11px;font-weight:800;color:var(--txt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">🔑 Administrador</div>';
+  html+='<div style="background:#E8F5E9;border:1px solid #A5D6A7;border-radius:8px;padding:9px 11px;font-size:10px;color:#2E7D32;margin-bottom:14px">✅ Credenciales de administrador protegidas con hash SHA-256. No se muestran en pantalla por seguridad.</div>';
+  // Show per-project passwords WITH USERNAMES
   if(typeof getAllProjects==='function'){
     const allProjs=getAllProjects().filter(p=>p.passwords&&Object.keys(p.passwords).length>0);
     if(allProjs.length>0){
-      html+='<div style="margin-top:14px;padding:10px;background:#E3F2FD;border-radius:8px;border:1px solid #90CAF9"><div style="font-weight:700;font-size:11px;margin-bottom:8px;color:#1565C0">🔑 CONTRASEÑAS POR PROYECTO</div>';
+      html+='<div style="margin-top:14px;padding:10px;background:#E3F2FD;border-radius:8px;border:1px solid #90CAF9"><div style="font-weight:700;font-size:11px;margin-bottom:8px;color:#1565C0">🔑 CREDENCIALES POR PROYECTO (usuario + contraseña)</div>';
       allProjs.forEach(proj=>{
+        const pusers=proj.usernames||{};
         html+='<div style="margin-bottom:8px;padding:8px;background:#fff;border-radius:6px;border:1px solid #BBDEFB"><div style="font-weight:700;font-size:11px;color:#1565C0;margin-bottom:4px">📂 '+proj.name+'</div>';
         (proj.cuadrillas||[]).forEach(q=>{
+          const quser=pusers['c'+q.id]||'(sin usuario)';
           const qpwd=proj.passwords['c'+q.id]||'(sin asignar)';
-          html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px"><span style="font-size:10px">C'+q.id+' — '+q.name+':</span><div class="ppr" style="margin:0;flex:1;margin-left:8px;max-width:220px"><input type="password" id="ppProj_'+proj.id+'_c'+q.id+'" value="'+qpwd+'"><button onclick="togglePwd(\'ppProj_'+proj.id+'_c'+q.id+'\',this)">👁</button></div></div>';
+          html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap">';
+          html+='<span style="font-size:10px;font-weight:700;min-width:90px">C'+q.id+' — '+q.name+':</span>';
+          html+='<input type="text" id="ppUser_'+proj.id+'_c'+q.id+'" value="'+quser+'" placeholder="Usuario" style="width:120px;padding:4px 7px;border:1px solid var(--brd);border-radius:5px;font-size:10px;font-family:monospace">';
+          html+='<div class="ppr" style="margin:0;flex:1;min-width:140px"><input type="password" id="ppProj_'+proj.id+'_c'+q.id+'" value="'+qpwd+'" placeholder="Contraseña"><button onclick="togglePwd(\'ppProj_'+proj.id+'_c'+q.id+'\',this)">👁</button></div>';
+          html+='</div>';
         });
         html+='</div>';
       });
@@ -2856,17 +2895,24 @@ function renderPwdPanel(){
   }
   html+='<hr style="border:none;border-top:1px solid var(--brd);margin:14px 0">';
   // Cuadrillas del proyecto activo
-  html+='<div style="font-size:11px;font-weight:800;color:var(--txt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">🔒 Contraseñas de Cuadrillas</div>';
-  const _activeProjPwds=(typeof getActiveProject==='function')?getActiveProject()?.passwords||{}:{};
+  html+='<div style="font-size:11px;font-weight:800;color:var(--txt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">🔒 Credenciales del Proyecto Activo</div>';
+  const _activeProj=(typeof getActiveProject==='function')?getActiveProject():null;
+  const _activeProjPwds=_activeProj?.passwords||{};
+  const _activeProjUsers=_activeProj?.usernames||{};
   const _isArenal=(typeof getActiveProjectId==='function')?getActiveProjectId()==='arenal_2026':true;
   if(!_isArenal){
-    html+='<div style="background:#FFF3E0;border:1px solid #FFB74D;border-radius:6px;padding:8px;font-size:10px;color:#E65100;margin-bottom:8px">⚠️ Estas contraseñas son del proyecto activo. Cada proyecto tiene sus propias contraseñas independientes.</div>';
+    html+='<div style="background:#FFF3E0;border:1px solid #FFB74D;border-radius:6px;padding:8px;font-size:10px;color:#E65100;margin-bottom:8px">⚠️ Estas credenciales son del proyecto activo. Cada proyecto tiene sus propias credenciales independientes.</div>';
   }
   _getActiveQIds().forEach(q=>{
     const projPwd=_activeProjPwds['c'+q]||(pwds['c'+q]||'');
-    const inputId=_isArenal?('ppC'+q):('ppProj_active_c'+q);
+    const projUser=_activeProjUsers['c'+q]||(_isArenal?'arenal_c'+q:'');
+    const inputIdPwd=_isArenal?('ppC'+q):('ppProj_active_c'+q);
+    const inputIdUser=_isArenal?('ppU'+q):('ppUser_active_c'+q);
     html+='<div class="ppfield"><label><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+(QC[q]||'#2E7D32')+'"></span> C'+q+' — '+(QN[q]||'Cuadrilla '+q)+'</label>';
-    html+='<div class="ppr"><input type="password" id="'+inputId+'" value="'+projPwd+'"><button onclick="togglePwd(\''+inputId+'\',this)">👁</button></div></div>';
+    html+='<div style="display:flex;gap:5px;flex-wrap:wrap">';
+    html+='<input type="text" id="'+inputIdUser+'" value="'+projUser+'" placeholder="Usuario" style="width:130px;padding:6px 9px;border:1.5px solid var(--brd);border-radius:6px;font-size:11px;font-family:monospace">';
+    html+='<div class="ppr" style="flex:1"><input type="password" id="'+inputIdPwd+'" value="'+projPwd+'"><button onclick="togglePwd(\''+inputIdPwd+'\',this)">👁</button></div>';
+    html+='</div></div>';
   });
   html+='<hr style="border:none;border-top:1px solid var(--brd);margin:14px 0">';
   // Visitantes autorizados
@@ -2930,37 +2976,49 @@ function removeVisitor(vid){
 }
 function savePwds(){
   const pwds=getPwds();
-  const nm=document.getElementById('ppMaster')?.value.trim();
-  if(nm&&nm!==pwds.master)pwds.master=nm;
+  // ── Save cuadrilla passwords + usernames ──────────────────────
   [1,2,3,4,5,6,7,8].forEach(q=>{
     // Arenal/global passwords
     const vG=document.getElementById('ppC'+q)?.value.trim();
     if(vG) pwds['c'+q]=vG;
-    // Active non-Arenal project passwords via ppProj_active_cQ
+    // Arenal usernames
+    const uG=document.getElementById('ppU'+q)?.value.trim().toLowerCase();
+    if(uG){
+      // Store Arenal usernames in the project object
+      const saved=JSON.parse(localStorage.getItem('sfv_mp_projects_v1')||'[]');
+      const arenal=saved.find(p=>p.id==='arenal_2026');
+      if(arenal){
+        if(!arenal.usernames) arenal.usernames={};
+        arenal.usernames['c'+q]=uG;
+        localStorage.setItem('sfv_mp_projects_v1',JSON.stringify(saved));
+      }
+    }
+    // Active non-Arenal project passwords + usernames via ppProj_active_cQ
     const vA=document.getElementById('ppProj_active_c'+q)?.value.trim();
-    if(vA&&typeof getActiveProject==='function'&&typeof getActiveProjectId==='function'){
+    const uA=document.getElementById('ppUser_active_c'+q)?.value.trim().toLowerCase();
+    if((vA||uA)&&typeof getActiveProject==='function'&&typeof getActiveProjectId==='function'){
       const pid=getActiveProjectId();
       if(pid&&pid!=='arenal_2026'){
-        const proj=getActiveProject();
-        if(proj&&proj.passwords){ proj.passwords['c'+q]=vA; }
-        // Save back to project list
         const KMP='sfv_mp_projects_v1';
         const saved=JSON.parse(localStorage.getItem(KMP)||'[]');
         const si=saved.findIndex(p=>p.id===pid);
-        if(si>=0&&saved[si].passwords) saved[si].passwords['c'+q]=vA;
-        localStorage.setItem(KMP,JSON.stringify(saved));
+        if(si>=0){
+          if(vA&&saved[si].passwords) saved[si].passwords['c'+q]=vA;
+          if(uA){ if(!saved[si].usernames) saved[si].usernames={}; saved[si].usernames['c'+q]=uA; }
+          localStorage.setItem(KMP,JSON.stringify(saved));
+        }
       }
     }
   });
-  // Save per-project passwords (ppProj_<projId>_c<q> inputs)
+  // Save per-project passwords + usernames (ppProj_<projId>_c<q> inputs)
   if(typeof getAllProjects==='function'){
     const allProjs=getAllProjects().filter(p=>!p.isBuiltIn&&p.passwords);
     if(allProjs.length){
-      const all=getAllProjects();
       let changed=false;
       allProjs.forEach(proj=>{
         (proj.cuadrillas||[]).forEach(q=>{
           const inp=document.getElementById('ppProj_'+proj.id+'_c'+q.id);
+          const uinp=document.getElementById('ppUser_'+proj.id+'_c'+q.id);
           if(inp){
             const nv=inp.value.trim();
             if(nv&&nv!=='(sin asignar)'&&nv!==proj.passwords['c'+q.id]){
@@ -2968,15 +3026,24 @@ function savePwds(){
               changed=true;
             }
           }
+          if(uinp){
+            const nu=uinp.value.trim().toLowerCase();
+            if(nu&&nu!=='(sin usuario)'){
+              if(!proj.usernames) proj.usernames={};
+              if(nu!==proj.usernames['c'+q.id]){
+                proj.usernames['c'+q.id]=nu;
+                changed=true;
+              }
+            }
+          }
         });
       });
       if(changed){
-        // Update projects list in localStorage
         const KMP='sfv_mp_projects_v1';
         const saved=JSON.parse(localStorage.getItem(KMP)||'[]');
         allProjs.forEach(proj=>{
           const idx=saved.findIndex(p=>p.id===proj.id);
-          if(idx>=0) saved[idx].passwords=proj.passwords;
+          if(idx>=0){ saved[idx].passwords=proj.passwords; saved[idx].usernames=proj.usernames; }
         });
         localStorage.setItem(KMP,JSON.stringify(saved));
       }
@@ -4054,12 +4121,9 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
       _applyUI(merged, pid);
       showToast('🔁 Datos sincronizados ✓');
     }
-    // 3. Also pull project list on startup
-    if(window.SFV_SYNC) window.SFV_SYNC.pullProjectList();
   }
 
   // ── Polling loop ──────────────────────────────────────────────────
-  let _pollCount=0;
   async function _poll(){
     if(!_online || _isSaving) return;
     const pid = _pid();
@@ -4072,11 +4136,6 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
         _lastHash = newHash;
         _applyUI(merged, pid);
         showToast('🔁 Actualización recibida desde otro dispositivo ✓');
-      }
-      // Every 3rd poll (~24s), also sync project list
-      _pollCount++;
-      if(_pollCount % 3 === 0 && window.SFV_SYNC){
-        window.SFV_SYNC.pullProjectList();
       }
     }catch(e){ console.warn('[SFV Poll]', e.message); }
   }
@@ -4134,84 +4193,6 @@ document.getElementById('loginInput').addEventListener('keydown',e=>{if(e.key===
       }catch(e){ console.warn('[SFV Storage]', e.message); }
     },
     getStatus(){ return{online:_online, pid:_pid()}; },
-
-    // ── PROJECT LIST SYNC ─────────────────────────────────────────
-    // Write project list to Firestore (global/projects_meta)
-    async writeProjectList(){
-      if(!_online) return;
-      try{
-        const KMP='sfv_mp_projects_v1';
-        const raw=localStorage.getItem(KMP);
-        if(!raw) return;
-        // Strip casas from each project to keep payload small
-        const projects=JSON.parse(raw).map(p=>{
-          const copy=Object.assign({},p);
-          delete copy.casas; // casas se importan via Excel en cada dispositivo
-          return copy;
-        });
-        const url=`${FB_BASE}/global/projects_meta?key=${FB_API_KEY}`;
-        const fields={
-          data: {stringValue: JSON.stringify(projects)},
-          updatedAt: {stringValue: new Date().toISOString()}
-        };
-        const res=await fetch(url,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});
-        if(res.ok) console.log('[SFV Sync] ✅ Project list synced to Firestore');
-        else console.warn('[SFV Sync] ⚠️ writeProjectList HTTP',res.status);
-      }catch(e){ console.warn('[SFV Sync] writeProjectList error:',e.message); }
-    },
-
-    // Pull project list from Firestore and merge with local
-    async pullProjectList(){
-      if(!_online) return;
-      try{
-        const url=`${FB_BASE}/global/projects_meta?key=${FB_API_KEY}`;
-        const res=await fetch(url);
-        if(!res.ok) return;
-        const body=await res.json();
-        if(!body.fields||!body.fields.data||!body.fields.data.stringValue) return;
-        const remote=JSON.parse(body.fields.data.stringValue);
-        if(!Array.isArray(remote)||!remote.length) return;
-        // Merge: remote projects that don't exist locally get added
-        const KMP='sfv_mp_projects_v1';
-        const local=JSON.parse(localStorage.getItem(KMP)||'[]');
-        const localIds=new Set(local.map(p=>p.id));
-        let changed=false;
-        remote.forEach(rp=>{
-          if(rp.id==='arenal_2026') return; // skip built-in
-          const localIdx=local.findIndex(lp=>lp.id===rp.id);
-          if(localIdx===-1){
-            // New project from another device — add it (without casas)
-            local.push(rp);
-            changed=true;
-            console.log('[SFV Sync] 📂 Nuevo proyecto recibido:',rp.name);
-          } else {
-            // Existing project — update metadata (passwords, dates, cuadrillas) if remote is newer
-            const lp=local[localIdx];
-            const rTime=rp.updatedAt||rp.createdAt||'';
-            const lTime=lp.updatedAt||lp.createdAt||'';
-            if(rTime>lTime){
-              // Preserve local casas (they may exist locally but not in sync)
-              const localCasas=lp.casas;
-              Object.assign(lp,rp);
-              if(localCasas&&!lp.casas) lp.casas=localCasas;
-              changed=true;
-            }
-          }
-        });
-        // Also check if remote DELETED a project that exists locally
-        const remoteIds=new Set(remote.map(p=>p.id));
-        // (We don't auto-delete — only add/update. Deletion requires master action.)
-        if(changed){
-          localStorage.setItem(KMP,JSON.stringify(local));
-          showToast('📂 Lista de proyectos actualizada desde otro dispositivo');
-          // Refresh project list UI if panel is open
-          if(typeof renderProjectList==='function'){
-            try{ renderProjectList(); }catch(e){}
-          }
-        }
-      }catch(e){ console.warn('[SFV Sync] pullProjectList error:',e.message); }
-    },
-
     // Legacy stubs
     queueCtrlRecord(){ this.afterSave(); },
     queueCtrlBatch(){  this.afterSave(); },
@@ -4274,6 +4255,7 @@ const ARENAL_PROJECT = {
     {id:3,name:'Cuadrilla 3',zone:'Centro Norte',color:'#E65100'},
     {id:4,name:'Cuadrilla 4',zone:'Norte Oriente',color:'#6A1B9A'}
   ],
+  usernames: {c1:'arenal_c1',c2:'arenal_c2',c3:'arenal_c3',c4:'arenal_c4'},
   casas: null // null = usar CASAS builtin
 };
 
@@ -4284,9 +4266,15 @@ const KMPACT = 'sfv_mp_active_v1';    // ID del proyecto activo
 // ── Obtener lista de proyectos (siempre incluye Arenal) ──────────
 function getAllProjects(){
   const saved = lsG(KMP)||[];
-  // Arenal always first
+  // Arenal always first — merge with ARENAL_PROJECT to get latest defaults (including usernames)
   const haArenal = saved.find(p=>p.id==='arenal_2026');
-  if(!haArenal) saved.unshift(ARENAL_PROJECT);
+  if(!haArenal){
+    saved.unshift({...ARENAL_PROJECT});
+  } else {
+    // Ensure Arenal has usernames even if saved before this update
+    if(!haArenal.usernames) haArenal.usernames=ARENAL_PROJECT.usernames;
+    if(!haArenal.cuadrillas) haArenal.cuadrillas=ARENAL_PROJECT.cuadrillas;
+  }
   return saved;
 }
 
@@ -4305,14 +4293,17 @@ function _loadActiveProject(){
 
   // ── 1. Rebuild CASAS ──────────────────────────────────────────────
   CASAS.length=0;
-  if(proj.id==='arenal_2026'||!proj.casas||!proj.casas.length){
+  if(proj.id==='arenal_2026'){
+    // Arenal: always use hardcoded VEREDAS data
     let n=1;
     VEREDAS.forEach(v=>{const c=VC[v.name];for(let i=0;i<v.t;i++){
       CASAS.push({id:n,nombre:NOM[n-1]||'—',vereda:v.name,cuadrilla:v.q,
         lat:c[0]+rnd(0.022),lng:c[1]+rnd(0.022)});n++;}});
-  } else {
+  } else if(proj.casas&&proj.casas.length){
+    // Other projects: use imported casas
     proj.casas.forEach(h=>CASAS.push(h));
   }
+  // If non-Arenal project has no casas yet, CASAS stays empty (no mixing!)
 
   // ── 2. Rebuild QC / QN / QI from project cuadrillas ──────────────
   // Clear all keys first
@@ -4593,8 +4584,14 @@ function saveMultiProject(){
   let casas=_mpImportParsed.length>0?_autoDistributeCasas([..._mpImportParsed],cuadrillas):null;
   // Per-project passwords: keep existing if editing, generate new if new
   const existingPwds=_mpEditingId?(getAllProjects().find(p=>p.id===_mpEditingId)?.passwords||{}):{};
+  const existingUsers=_mpEditingId?(getAllProjects().find(p=>p.id===_mpEditingId)?.usernames||{}):{};
   const passwords={};
-  cuadrillas.forEach(q=>{ passwords['c'+q.id]=existingPwds['c'+q.id]||_genPwd(); });
+  const usernames={};
+  const slug=_slugify(name);
+  cuadrillas.forEach(q=>{
+    passwords['c'+q.id]=existingPwds['c'+q.id]||_genPwd();
+    usernames['c'+q.id]=existingUsers['c'+q.id]||(slug+'_c'+q.id);
+  });
   const proj={
     id: projId,
     name, municipality:muni, department:dept||'Colombia', country:'Colombia',
@@ -4604,10 +4601,9 @@ function saveMultiProject(){
     endDate: document.getElementById('mpf-end').value||'',
     total: casas?casas.length:parseInt(document.getElementById('mpf-total').value)||0,
     dailyTarget: parseInt(document.getElementById('mpf-daily')?.value)||0,
-    cuadrillas, passwords, isBuiltIn:false,
+    cuadrillas, passwords, usernames, isBuiltIn:false,
     casas: casas||(_mpEditingId?getAllProjects().find(p=>p.id===_mpEditingId)?.casas:null),
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    createdAt: new Date().toISOString()
   };
   const all=getAllProjects().filter(p=>p.id!=='arenal_2026');
   const idx=all.findIndex(p=>p.id===proj.id);
@@ -4630,12 +4626,10 @@ function saveMultiProject(){
   }
   _renderDirQTabs();
   showToast('✅ Proyecto "'+name+'" guardado y cargado');
-  // ── Sync project list to Firestore ──
-  if(window.SFV_SYNC&&typeof window.SFV_SYNC.writeProjectList==='function') window.SFV_SYNC.writeProjectList();
   if(isNew){
-    const lines=cuadrillas.map(q=>'  C'+q.id+' ('+q.name+'): '+passwords['c'+q.id]).join('\n');
+    const lines=cuadrillas.map(q=>'  C'+q.id+' ('+q.name+'):\n    Usuario: '+usernames['c'+q.id]+'\n    Contraseña: '+passwords['c'+q.id]).join('\n');
     setTimeout(()=>{
-      alert('✅ Proyecto creado: '+name+'\n\n🔑 CONTRASEÑAS CUADRILLAS (guárdalas):\n'+lines+'\n\nEl master puede verlas en: Administración → Panel contraseñas');
+      alert('✅ Proyecto creado: '+name+'\n\n🔑 CREDENCIALES CUADRILLAS (guárdalas):\n'+lines+'\n\nEl master puede verlas en: Administración → Panel contraseñas');
     },400);
   }
 }
@@ -4655,27 +4649,27 @@ function deleteProject(id){
   if(id==='arenal_2026'){showToast('⚠️ El proyecto Arenal no se puede eliminar');return;}
   const p=getAllProjects().find(x=>x.id===id);
   if(!p){showToast('Proyecto no encontrado');return;}
-  const masterPwd=prompt('Ingresa la contraseña maestra para eliminar el proyecto "'+p.name+'":');
-  if(masterPwd===null) return;
-  if(masterPwd!==getPwds().master){showToast('❌ Contraseña incorrecta');return;}
-  if(!confirm('¿Eliminar definitivamente "'+p.name+'" y todos sus datos?\nEsta acción no se puede deshacer.')) return;
-  // Delete storage keys for this project
-  const prefix='sfv_p_'+id+'_';
-  const toDelete=[];
-  for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(prefix))toDelete.push(k);}
-  toDelete.forEach(k=>localStorage.removeItem(k));
-  // Remove from list
-  const all=getAllProjects().filter(p=>p.id!=='arenal_2026'&&p.id!==id);
-  lsS(KMP,[ARENAL_PROJECT,...all]);
-  // If deleted active, switch to Arenal
-  if(getActiveProjectId()===id){
-    localStorage.setItem(KMPACT,'arenal_2026');
-    _loadActiveProject(); updateKPIs(); renderDir();
-  }
-  renderProjectList();
-  showToast('🗑️ Proyecto "'+p.name+'" eliminado');
-  // ── Sync project list to Firestore ──
-  if(window.SFV_SYNC&&typeof window.SFV_SYNC.writeProjectList==='function') window.SFV_SYNC.writeProjectList();
+  openMasterConfirm(
+    '🗑 Eliminar proyecto',
+    '¿Eliminar definitivamente <strong>"'+p.name+'"</strong> y todos sus datos?<br>Esta acción no se puede deshacer.',
+    ()=>{
+      // Delete storage keys for this project
+      const prefix='sfv_p_'+id+'_';
+      const toDelete=[];
+      for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(prefix))toDelete.push(k);}
+      toDelete.forEach(k=>localStorage.removeItem(k));
+      // Remove from list
+      const all=getAllProjects().filter(p=>p.id!=='arenal_2026'&&p.id!==id);
+      lsS(KMP,[ARENAL_PROJECT,...all]);
+      // If deleted active, switch to Arenal
+      if(getActiveProjectId()===id){
+        localStorage.setItem(KMPACT,'arenal_2026');
+        _loadActiveProject(); updateKPIs(); renderDir();
+      }
+      renderProjectList();
+      showToast('🗑️ Proyecto "'+p.name+'" eliminado');
+    }
+  );
 }
 
 // ── Excel import for new project ─────────────────────────────────
