@@ -1,0 +1,20 @@
+# dependencias
+node_modules/
+
+# variables de entorno
+.env
+
+# logs
+*.log
+npm-debug.log*
+
+# sistema
+.DS_Store
+Thumbs.db
+
+# archivos temporales
+*.tmp
+*.swp
+
+# zip o backups
+*.zip

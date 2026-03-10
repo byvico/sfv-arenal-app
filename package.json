@@ -1,25 +1,20 @@
 {
-  "name": "sfv-arenal-app",
+  "name": "sfv-backend",
   "version": "1.0.0",
-  "description": "Dashboard SFV Arenal - App Android offline-first",
+  "description": "Backend API — Dashboard SFV Sistemas Fotovoltaicos",
+  "main": "server.js",
   "scripts": {
-    "build": "echo 'Sitio estatico, no requiere build'",
-    "cap": "npx cap",
-    "sync": "npx cap sync android",
-    "open": "npx cap open android"
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "migrate": "node sql/migrate.js"
   },
   "dependencies": {
-    "@capacitor/android": "^6.0.0",
-    "@capacitor/camera": "^6.0.0",
-    "@capacitor/core": "^6.0.0",
-    "@capacitor/geolocation": "^6.0.0",
-    "@capacitor/network": "^6.0.0",
-    "@capacitor/preferences": "^6.0.0",
-    "@capacitor/splash-screen": "^6.0.0",
-    "@capacitor/status-bar": "^6.0.0"
+    "express": "^4.21.2",
+    "pg": "^8.13.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
   },
-  "devDependencies": {
-    "@capacitor/cli": "6.0.0",
-    "@ionic/cli": "^7.0.0"
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
