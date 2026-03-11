@@ -52,6 +52,7 @@ app.use('/control',   require('./routes/control'));
 app.use('/proyectos', require('./routes/proyectos'));
 const eventsRoutes = require('./routes/events');
 app.use('/events', eventsRoutes.router);
+app.use('/api', require('./routes/upload'));
 
 // ── Health check con estadísticas SSE ───────────────────
 app.get('/', (req, res) => {

@@ -1,10 +1,9 @@
-
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
-const { broadcast } = require("../events");
 
 router.post("/", async (req, res) => {
+
   try {
 
     const {
@@ -25,21 +24,15 @@ router.post("/", async (req, res) => {
       [item, slot_idx, url, cuadrilla, proyecto]
     );
 
-    const foto = result.rows[0];
-
-    broadcast(proyecto, "control_update", {
-      action: "photo_added",
-      item,
-      slot: slot_idx,
-      url
-    });
-
-    res.json(foto);
+    res.json(result.rows[0]);
 
   } catch (err) {
+
     console.error(err);
     res.status(500).json({ error: "Error guardando foto" });
+
   }
+
 });
 
 module.exports = router;

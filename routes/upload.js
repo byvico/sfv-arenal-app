@@ -1,4 +1,3 @@
-
 const express = require("express");
 const multer = require("multer");
 const { v2: cloudinary } = require("cloudinary");
@@ -15,10 +14,13 @@ cloudinary.config({
 });
 
 router.post("/upload-photo", upload.single("photo"), async (req, res) => {
+
   try {
+
     const file = req.file;
 
     const result = await new Promise((resolve, reject) => {
+
       const stream = cloudinary.uploader.upload_stream(
         {
           folder: "sfv",
@@ -31,6 +33,7 @@ router.post("/upload-photo", upload.single("photo"), async (req, res) => {
       );
 
       stream.end(file.buffer);
+
     });
 
     res.json({
@@ -38,9 +41,12 @@ router.post("/upload-photo", upload.single("photo"), async (req, res) => {
     });
 
   } catch (err) {
+
     console.error("Cloudinary upload error:", err);
     res.status(500).json({ error: "upload failed" });
+
   }
+
 });
 
 module.exports = router;
