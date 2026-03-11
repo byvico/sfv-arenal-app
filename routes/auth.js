@@ -1,11 +1,14 @@
 // ══════════════════════════════════════════════════════════
-// routes/auth.js — Login / Logout / Validación de sesión
+// routes/auth.js — Login / Logout / Validación v2
+//
+// Cambios vs v1:
+//   [7] Eliminada condición peligrosa (user===vPwd && password===vPwd)
+//   [8] SELECT solo columnas necesarias en login
 // ══════════════════════════════════════════════════════════
 const router = require('express').Router();
 const pool = require('../db');
 const { sha256, createSession, destroySession, validateSession } = require('../middleware/auth');
 
-// Hash del admin (SHA-256 de "user:password")
 const ADMIN_HASH = '9dd33c5afe109e132d1b368cdebe3aa1dafa7760a14ea08b63c0e9c794a86923';
 
 // ── POST /auth/login ────────────────────────────────────
@@ -15,30 +18,31 @@ router.post('/login', async (req, res) => {
     if (!usuario || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
     }
-
     const user = usuario.trim().toLowerCase();
 
-    // 1. Verificar admin
+    // 1. Admin
     const hash = await sha256(user + ':' + password);
     if (hash === ADMIN_HASH) {
       const { token, expiresAt } = await createSession({
         rol: 'master', nombre: 'Administrador', canEdit: true
       });
       return res.json({
-        ok: true,
-        token,
-        expiresAt,
+        ok: true, token, expiresAt,
         session: { role: 'master', cuadrilla: null, name: 'Administrador', canEdit: true }
       });
     }
 
-    // 2. Verificar cuadrilla en todos los proyectos
-    const proyectos = await pool.query('SELECT * FROM proyectos ORDER BY created_at');
+    // [8] Solo columnas necesarias — no cargar datos pesados
+    const proyectos = await pool.query(
+      'SELECT id, credenciales, usernames, cuadrillas, config FROM proyectos ORDER BY created_at'
+    );
+
     for (const proj of proyectos.rows) {
       const creds = proj.credenciales || {};
       const unames = proj.usernames || {};
       const cuadrillas = proj.cuadrillas || [];
 
+      // 2. Cuadrilla
       for (let q = 1; q <= cuadrillas.length; q++) {
         const uKey = 'c' + q;
         const expectedUser = (unames[uKey] || '').toLowerCase();
@@ -48,29 +52,57 @@ router.post('/login', async (req, res) => {
         if (user === expectedUser && password === expectedPwd) {
           const cuadrilla = cuadrillas.find(c => c.id === q);
           const { token, expiresAt } = await createSession({
-            rol: 'cuadrilla',
-            cuadrilla: q,
+            rol: 'cuadrilla', cuadrilla: q,
             nombre: cuadrilla?.name || 'Cuadrilla ' + q,
-            canEdit: true,
-            proyectoId: proj.id
+            canEdit: true, proyectoId: proj.id
           });
           return res.json({
-            ok: true,
-            token,
-            expiresAt,
+            ok: true, token, expiresAt,
             session: {
-              role: 'cuadrilla',
-              cuadrilla: q,
+              role: 'cuadrilla', cuadrilla: q,
               name: cuadrilla?.name || 'Cuadrilla ' + q,
-              canEdit: true,
-              projectId: proj.id
+              canEdit: true, projectId: proj.id
+            }
+          });
+        }
+      }
+
+      // 3. Visitantes
+      // [7] Solo dos formas válidas de login:
+      //     a) usuario + contraseña (si el visitante tiene username asignado)
+      //     b) solo contraseña (si el visitante NO tiene username)
+      //     ELIMINADA la condición (user === vPwd && password === vPwd)
+      const config = proj.config || {};
+      const visitors = config.visitors || [];
+      for (const vis of visitors) {
+        const vUser = (vis.username || '').toLowerCase();
+        const vPwd = vis.password || '';
+        if (!vPwd) continue;
+
+        const match = vUser
+          ? (user === vUser && password === vPwd)    // a) con username
+          : (password === vPwd);                      // b) sin username
+
+        if (match) {
+          const { token, expiresAt } = await createSession({
+            rol: 'visitor', nombre: vis.name || 'Visitante',
+            canEdit: vis.canEdit || false, proyectoId: proj.id,
+            extra: { visId: vis.id }
+          });
+          return res.json({
+            ok: true, token, expiresAt,
+            session: {
+              role: 'visitor', cuadrilla: null,
+              name: vis.name || 'Visitante',
+              canEdit: vis.canEdit || false,
+              projectId: proj.id, visId: vis.id
             }
           });
         }
       }
     }
 
-    // 3. No encontrado
+    // 4. No encontrado
     return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
 
   } catch (e) {
@@ -91,7 +123,6 @@ router.post('/logout', async (req, res) => {
 });
 
 // ── GET /auth/validate ──────────────────────────────────
-// El frontend llama esto al cargar para verificar si la sesión sigue activa
 router.get('/validate', async (req, res) => {
   try {
     const token = req.headers['x-session-token'];
@@ -100,32 +131,13 @@ router.get('/validate', async (req, res) => {
     const session = await validateSession(token);
     if (!session) return res.json({ valid: false });
 
-    // Si es cuadrilla, devolver datos del proyecto
-    let proyecto = null;
-    if (session.proyectoId) {
-      const pRes = await pool.query('SELECT * FROM proyectos WHERE id = $1', [session.proyectoId]);
-      if (pRes.rows.length) {
-        const p = pRes.rows[0];
-        proyecto = {
-          id: p.id,
-          name: p.nombre,
-          municipality: p.municipio,
-          department: p.departamento,
-          timezone: p.zona_horaria
-        };
-      }
-    }
-
     res.json({
       valid: true,
       session: {
-        role: session.rol,
-        cuadrilla: session.cuadrilla,
-        name: session.nombre,
-        canEdit: session.canEdit,
+        role: session.rol, cuadrilla: session.cuadrilla,
+        name: session.nombre, canEdit: session.canEdit,
         projectId: session.proyectoId
-      },
-      proyecto
+      }
     });
   } catch (e) {
     console.error('[Auth Validate]', e.message);
@@ -133,17 +145,14 @@ router.get('/validate', async (req, res) => {
   }
 });
 
-// ── POST /auth/viewer ───────────────────────────────────
-// Login como visitante (solo lectura)
+// ── POST /auth/viewer — Solo lectura sin credenciales ───
 router.post('/viewer', async (req, res) => {
   try {
     const { token, expiresAt } = await createSession({
       rol: 'viewer', nombre: 'Visitante (solo lectura)', canEdit: false
     });
     res.json({
-      ok: true,
-      token,
-      expiresAt,
+      ok: true, token, expiresAt,
       session: { role: 'viewer', cuadrilla: null, name: 'Visitante (solo lectura)', canEdit: false }
     });
   } catch (e) {

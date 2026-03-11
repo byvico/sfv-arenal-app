@@ -1,124 +1,85 @@
 // ══════════════════════════════════════════════════════════
-// server.js — SFV Backend API
-// Node.js + Express + PostgreSQL (Render)
-//
-// Elimina: localStorage, Firestore, problemas de cache,
-//          errores de sincronización, errores de hora
-//
-// PostgreSQL es la FUENTE DE VERDAD
+// server.js — SFV Backend API v3
+// SSE por proyecto · Sin endpoints legacy · Token en SSE
 // ══════════════════════════════════════════════════════════
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const pool = require('./db');
 const { cleanExpiredSessions } = require('./middleware/auth');
+const { getClientCount, getChannelStats } = require('./routes/events');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ══════════════════════════════════════════════════════════
-// MIDDLEWARE
-// ══════════════════════════════════════════════════════════
-
-// CORS — permitir peticiones desde cualquier origen (dashboard en Wix, archivo local, APK)
+// ── CORS ────────────────────────────────────────────────
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'X-Session-Token', 'Authorization'],
-  exposedHeaders: ['X-Server-Time', 'X-Data-Hash']
+  exposedHeaders: ['X-Server-Time']
 }));
 
-// Body parser
+// ── Body parser ─────────────────────────────────────────
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// ANTI-CACHÉ — forzar que el navegador nunca use datos viejos
+// ── Anti-caché (excepto SSE) ────────────────────────────
 app.use((req, res, next) => {
+  if (req.path === '/events') return next();
   res.set({
-    'Cache-Control': 'no-cache, no-store, must-revalidate, proxy-revalidate',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
     'Pragma': 'no-cache',
     'Expires': '0',
-    'Surrogate-Control': 'no-store',
     'X-Server-Time': new Date().toISOString()
   });
   next();
 });
 
-// Request logging (desarrollo)
+// ── Logging (excluye SSE y OPTIONS) ─────────────────────
 app.use((req, res, next) => {
-  if (req.method !== 'OPTIONS') {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  if (req.method !== 'OPTIONS' && req.path !== '/events') {
+    console.log(`[${new Date().toISOString().slice(11,19)}] ${req.method} ${req.path}`);
   }
   next();
 });
 
-// ══════════════════════════════════════════════════════════
-// RUTAS
-// ══════════════════════════════════════════════════════════
+// ── RUTAS ───────────────────────────────────────────────
 app.use('/auth',      require('./routes/auth'));
 app.use('/usuarios',  require('./routes/usuarios'));
 app.use('/fotos',     require('./routes/fotos'));
 app.use('/control',   require('./routes/control'));
 app.use('/proyectos', require('./routes/proyectos'));
+app.use('/events',    require('./routes/events'));
 
-// ── Health check ────────────────────────────────────────
+// ── Health check con estadísticas SSE ───────────────────
 app.get('/', (req, res) => {
   res.json({
-    service: 'SFV Backend API',
-    version: '1.0.0',
+    service: 'SFV Backend API v3',
     status: 'running',
-    timestamp: new Date().toISOString(),
-    endpoints: {
-      auth:      'POST /auth/login, POST /auth/logout, GET /auth/validate, POST /auth/viewer',
-      usuarios:  'GET/POST /usuarios, GET/PUT/DELETE /usuarios/:id, POST /usuarios/bulk',
-      fotos:     'GET/POST /fotos, GET/DELETE /fotos/:id, GET /fotos/count/:item',
-      control:   'GET/POST /control, PUT/DELETE /control/:id, GET /control/hash, POST /control/sync',
-      proyectos: 'GET/POST /proyectos, GET/PUT/DELETE /proyectos/:id, GET /proyectos/timezones'
-    }
+    sync: 'SSE (no polling)',
+    sse_clients: getClientCount(),
+    sse_channels: getChannelStats(),
+    timestamp: new Date().toISOString()
   });
 });
 
-// ── Hora del servidor (para debug de timezone) ──────────
+// ── Hora ────────────────────────────────────────────────
 app.get('/hora', async (req, res) => {
   try {
     const tz = req.query.tz || 'America/Bogota';
-    const result = await pool.query(`
-      SELECT
-        NOW()::text AS utc,
-        (NOW() AT TIME ZONE $1)::text AS local,
-        $1 AS zona_horaria
-    `, [tz]);
-    res.json(result.rows[0]);
-  } catch (e) {
-    res.json({
-      utc: new Date().toISOString(),
-      error: e.message
-    });
-  }
+    const r = await pool.query(`SELECT NOW()::text AS utc, (NOW() AT TIME ZONE $1)::text AS local`, [tz]);
+    res.json(r.rows[0]);
+  } catch(e) { res.json({ utc: new Date().toISOString() }); }
 });
 
-// ── 404 ─────────────────────────────────────────────────
-app.use((req, res) => {
-  res.status(404).json({ error: 'Ruta no encontrada: ' + req.method + ' ' + req.path });
-});
+// ── 404 + Error handler ─────────────────────────────────
+app.use((req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
+app.use((err, req, res, next) => { console.error('[Error]', err.message); res.status(500).json({ error: 'Error interno' }); });
 
-// ── Error handler global ────────────────────────────────
-app.use((err, req, res, next) => {
-  console.error('[Error]', err.message);
-  res.status(500).json({ error: 'Error interno del servidor' });
-});
-
-// ══════════════════════════════════════════════════════════
-// INICIAR SERVIDOR
-// ══════════════════════════════════════════════════════════
+// ── START ───────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n══════════════════════════════════════════`);
-  console.log(`  SFV Backend API`);
-  console.log(`  Puerto: ${PORT}`);
-  console.log(`  Hora: ${new Date().toISOString()}`);
-  console.log(`══════════════════════════════════════════\n`);
-
-  // Limpiar sesiones expiradas cada hora
+  console.log(`\n  SFV Backend v3 (SSE autenticado) — Puerto ${PORT}\n`);
   setInterval(cleanExpiredSessions, 60 * 60 * 1000);
   cleanExpiredSessions();
 });
