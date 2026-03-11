@@ -5,6 +5,7 @@
 const router = require('express').Router();
 const pool = require('../db');
 const { requireAuth } = require('../middleware/auth');
+const { broadcast } = require('./events');
 
 // ── POST /fotos — Registrar foto ────────────────────────
 router.post('/', requireAuth, async (req, res) => {
@@ -40,7 +41,16 @@ router.post('/', requireAuth, async (req, res) => {
     );
     foto.hora_local = tzRes.rows[0]?.hora_local;
 
-    res.status(201).json(foto);
+    
+// Notificar a todos los dashboards que hay nueva foto
+broadcast(pid, 'control_update', {
+  action:'photo_added',
+  item:item,
+  slot:slot_idx
+});
+
+res.status(201).json(foto);
+
   } catch (e) {
     console.error('[Fotos POST]', e.message);
     res.status(500).json({ error: 'Error al registrar foto', detail: e.message });

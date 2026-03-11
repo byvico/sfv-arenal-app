@@ -136,7 +136,11 @@ function getChannelStats() {
   return stats;
 }
 
-module.exports = router;
-module.exports.broadcast = broadcast;
-module.exports.getClientCount = getClientCount;
-module.exports.getChannelStats = getChannelStats;
+
+module.exports = {
+  router,
+  broadcast,
+  getClientCount,
+  getChannelStats
+};
+

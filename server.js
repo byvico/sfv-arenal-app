@@ -50,7 +50,8 @@ app.use('/usuarios',  require('./routes/usuarios'));
 app.use('/fotos',     require('./routes/fotos'));
 app.use('/control',   require('./routes/control'));
 app.use('/proyectos', require('./routes/proyectos'));
-app.use('/events',    require('./routes/events'));
+const eventsRoutes = require('./routes/events');
+app.use('/events', eventsRoutes.router);
 
 // ── Health check con estadísticas SSE ───────────────────
 app.get('/', (req, res) => {

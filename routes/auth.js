@@ -67,40 +67,7 @@ router.post('/login', async (req, res) => {
         }
       }
 
-      // 3. Visitantes
-      // [7] Solo dos formas válidas de login:
-      //     a) usuario + contraseña (si el visitante tiene username asignado)
-      //     b) solo contraseña (si el visitante NO tiene username)
-      //     ELIMINADA la condición (user === vPwd && password === vPwd)
-      const config = proj.config || {};
-      const visitors = config.visitors || [];
-      for (const vis of visitors) {
-        const vUser = (vis.username || '').toLowerCase();
-        const vPwd = vis.password || '';
-        if (!vPwd) continue;
-
-        const match = vUser
-          ? (user === vUser && password === vPwd)    // a) con username
-          : (password === vPwd);                      // b) sin username
-
-        if (match) {
-          const { token, expiresAt } = await createSession({
-            rol: 'visitor', nombre: vis.name || 'Visitante',
-            canEdit: vis.canEdit || false, proyectoId: proj.id,
-            extra: { visId: vis.id }
-          });
-          return res.json({
-            ok: true, token, expiresAt,
-            session: {
-              role: 'visitor', cuadrilla: null,
-              name: vis.name || 'Visitante',
-              canEdit: vis.canEdit || false,
-              projectId: proj.id, visId: vis.id
-            }
-          });
-        }
-      }
-    }
+      // 3. Visitantes DESHABILITADOS por seguridad
 
     // 4. No encontrado
     return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
