@@ -81,7 +81,6 @@ router.post('/login', async (req, res) => {
       }
     }
 
-    // Si no coincide ningún usuario
     return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
 
   } catch (e) {
